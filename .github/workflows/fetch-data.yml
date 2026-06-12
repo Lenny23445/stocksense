@@ -1,0 +1,32 @@
+name: Kursdaten aktualisieren
+
+on:
+  schedule:
+    # Mo–Sa um 05:15, 11:15, 17:15, 23:15 UTC (deckt EU- und US-Börsenschluss ab)
+    - cron: '15 5,11,17,23 * * 1-6'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fetch-data
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Kursdaten holen
+        run: node scripts/fetch.mjs
+      - name: Änderungen committen
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/universe.json
+          git diff --cached --quiet || git commit -m "Kursdaten aktualisiert"
+          git push
