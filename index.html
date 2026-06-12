@@ -162,6 +162,21 @@ body{
 #toast{position:fixed;bottom:calc(var(--tabbar-h) + env(safe-area-inset-bottom,0px) + 16px);left:50%;transform:translateX(-50%) translateY(20px);background:var(--surface-2);border:1px solid var(--border);color:var(--text);font-size:.85rem;padding:10px 18px;border-radius:999px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:200;max-width:90%;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
+/* ── Schlagzeilen ── */
+.newsItem{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--border);text-decoration:none;color:var(--text)}
+.newsItem:first-of-type{border-top:none}
+.newsItem .ns{flex-shrink:0;margin-top:2px}
+.newsItem .ns svg{width:15px;height:15px}
+.newsItem .ns.pos{color:var(--up)}.newsItem .ns.neg{color:var(--down)}.newsItem .ns.neu{color:var(--text-3)}
+.newsItem .nt{flex:1;font-size:.85rem;line-height:1.4}
+.newsItem .nm{display:block;font-size:.72rem;color:var(--text-3);margin-top:2px}
+.newsItem .nl{flex-shrink:0;color:var(--text-3)}
+.newsItem .nl svg{width:14px;height:14px}
+.topicBox{display:flex;align-items:center;gap:8px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-family:ui-monospace,monospace;font-size:.85rem;word-break:break-all}
+.steps{list-style:none;display:flex;flex-direction:column;gap:10px;margin:12px 0}
+.steps li{display:flex;gap:10px;font-size:.86rem;color:var(--text-2);align-items:flex-start}
+.steps .stepN{width:22px;height:22px;border-radius:50%;background:var(--up-bg);color:var(--up);font-weight:700;font-size:.75rem;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+
 .up-t{color:var(--up)}.down-t{color:var(--down)}.flat-t{color:var(--text-2)}
 </style>
 </head>
@@ -172,9 +187,14 @@ body{
   <section class="view" id="view-today">
     <div class="head">
       <div><h1>StockSense</h1><div class="sub" id="todaySub"></div></div>
+      <div style="display:flex;gap:8px">
+      <button class="iconbtn" id="btnPush" aria-label="Push-Benachrichtigungen einrichten">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      </button>
       <button class="iconbtn" id="btnRefresh" aria-label="Daten aktualisieren">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
       </button>
+      </div>
     </div>
     <div id="todayContent">
       <div class="skel" style="height:84px;margin-bottom:12px"></div>
@@ -242,7 +262,10 @@ const ICONS = {
   pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
   warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
   globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
 };
+const NTFY_TOPIC = 'stocksense-tipps-kx84qv2n';
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const nf2 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const nf0 = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 });
@@ -288,6 +311,8 @@ const state = {
   watch: JSON.parse(localStorage.getItem('ss_watch') || '[]'),
   detailRange: '3M',
   detailHorizon: 30,
+  tipHorizon: 30,
+  news: {},
 };
 const savePf = () => localStorage.setItem('ss_portfolio', JSON.stringify(state.portfolio));
 const saveWatch = () => localStorage.setItem('ss_watch', JSON.stringify(state.watch));
@@ -370,29 +395,41 @@ function computeIndicators(tk) {
   };
 }
 
-function computeScore(I) {
+/* Gewichte je Anlagehorizont: kurzfristig Momentum-lastig, langfristig Trend/Volatilität-lastig */
+const SCORE_WEIGHTS = {
+  30:  { trend: 35, mom: 25, rsi: 15, vol: 15, volm: 10 },
+  90:  { trend: 35, mom: 25, rsi: 15, vol: 15, volm: 10 },
+  180: { trend: 40, mom: 20, rsi: 10, vol: 20, volm: 10 },
+  365: { trend: 45, mom: 15, rsi: 5,  vol: 25, volm: 10 },
+};
+function computeScore(I, w) {
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
   let trend = 0;
-  if (I.sma20 != null && I.price > I.sma20) trend += 9;
-  if (I.sma20 != null && I.sma50 != null && I.sma20 > I.sma50) trend += 9;
-  if (I.sma50 != null && I.sma200 != null && I.sma50 > I.sma200) trend += 9;
-  if (I.sma200 != null) trend += clamp((I.price / I.sma200 - 1 + 0.1) / 0.2, 0, 1) * 8;
-  else trend = trend / 27 * 35;
+  if (I.sma20 != null && I.price > I.sma20) trend += w.trend * 9 / 35;
+  if (I.sma20 != null && I.sma50 != null && I.sma20 > I.sma50) trend += w.trend * 9 / 35;
+  if (I.sma50 != null && I.sma200 != null && I.sma50 > I.sma200) trend += w.trend * 9 / 35;
+  if (I.sma200 != null) trend += clamp((I.price / I.sma200 - 1 + 0.1) / 0.2, 0, 1) * w.trend * 8 / 35;
+  else trend = trend / (w.trend * 27 / 35) * w.trend || 0;
   let momentum = 0;
   for (const m of [I.mom1, I.mom3, I.mom6]) {
-    if (m == null) { momentum += 4.17; continue; }
-    momentum += clamp((m + 0.15) / 0.3, 0, 1) * 8.33;
+    if (m == null) { momentum += w.mom / 6; continue; }
+    momentum += clamp((m + 0.15) / 0.3, 0, 1) * w.mom / 3;
   }
-  let rsiScore = 7.5;
+  let rsiScore = w.rsi / 2;
   if (I.rsi != null) {
     rsiScore = I.rsi <= 55
-      ? clamp((I.rsi - 25) / 30, 0, 1) * 15
-      : clamp(1 - (I.rsi - 55) / 30, 0, 1) * 15;
+      ? clamp((I.rsi - 25) / 30, 0, 1) * w.rsi
+      : clamp(1 - (I.rsi - 55) / 30, 0, 1) * w.rsi;
   }
-  let volScore = 7.5;
-  if (I.annVol != null) volScore = clamp(1 - (I.annVol - 0.15) / 0.45, 0, 1) * 15;
-  const volumeScore = clamp((I.volTrend + 0.3) / 0.6, 0, 1) * 10;
+  let volScore = w.vol / 2;
+  if (I.annVol != null) volScore = clamp(1 - (I.annVol - 0.15) / 0.45, 0, 1) * w.vol;
+  const volumeScore = clamp((I.volTrend + 0.3) / 0.6, 0, 1) * w.volm;
   return Math.round(clamp(trend + momentum + rsiScore + volScore + volumeScore, 0, 100));
+}
+function computeScores(I) {
+  const out = {};
+  for (const h of [30, 90, 180, 365]) out[h] = computeScore(I, SCORE_WEIGHTS[h]);
+  return out;
 }
 
 /* Monte-Carlo-Prognose (GBM, deterministisch geseedet) */
@@ -414,7 +451,7 @@ function computeForecast(tk, I) {
   const momDrift = I.mom3 != null ? Math.log(1 + I.mom3) / 63 : ewma;
   const mu = Math.max(-0.002, Math.min(0.002, 0.6 * ewma + 0.4 * momDrift));
   const sigma = stddev(r.slice(-60));
-  const STEPS = 64, PATHS = 600; // 64 Handelstage ≈ 90 Kalendertage
+  const STEPS = 261, PATHS = 600; // 261 Handelstage ≈ 365 Kalendertage
   let seed = c.length * 31 + Math.round(price * 100);
   for (const ch of tk.s) seed = (seed * 33 + ch.charCodeAt(0)) | 0;
   const rnd = mulberry32(seed);
@@ -424,11 +461,13 @@ function computeForecast(tk, I) {
     while (v === 0) v = rnd();
     return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
   };
+  // Drift klingt mit Halbwertszeit ~95 Handelstagen ab — Momentum trägt nicht unbegrenzt
+  const muArr = Array.from({ length: STEPS }, (_, s) => mu * Math.pow(0.5, s / 95));
   const grid = Array.from({ length: STEPS }, () => new Array(PATHS));
   for (let p = 0; p < PATHS; p++) {
     let x = price;
     for (let s = 0; s < STEPS; s++) {
-      x *= Math.exp(mu - sigma * sigma / 2 + sigma * gauss());
+      x *= Math.exp(muArr[s] - sigma * sigma / 2 + sigma * gauss());
       grid[s][p] = x;
     }
   }
@@ -451,7 +490,7 @@ function computeForecast(tk, I) {
       target: med[idx], pUp: cnt / PATHS, steps: idx + 1,
     };
   };
-  return { med, lo, hi, stepDays: 7 / 5, h: { 7: horizon(7), 30: horizon(30), 90: horizon(90) } };
+  return { med, lo, hi, stepDays: 7 / 5, h: { 30: horizon(30), 90: horizon(90), 180: horizon(180), 365: horizon(365) } };
 }
 
 function computeReasons(tk, I) {
@@ -492,9 +531,17 @@ function analyze(sym) {
   const tk = getTicker(sym);
   if (!tk || tk.c.length < 30) return null;
   const I = computeIndicators(tk);
-  const a = { I, score: computeScore(I), fc: computeForecast(tk, I), reasons: computeReasons(tk, I) };
+  const scores = computeScores(I);
+  const a = { I, scores, score: scores[30], reasons: computeReasons(tk, I), fc: null };
   state.analyses.set(sym, a);
   return a;
+}
+// Monte-Carlo erst bei Bedarf rechnen (teuer) — nicht für jede Listen-Zeile
+function forecastOf(sym) {
+  const a = analyze(sym);
+  if (!a) return null;
+  if (!a.fc) a.fc = computeForecast(getTicker(sym), a.I);
+  return a.fc;
 }
 function scoreLabel(s) {
   if (s >= 65) return { txt: 'Kaufsignal', cls: 'up' };
@@ -620,6 +667,11 @@ async function loadUniverse() {
   state.data = data;
   state.map.clear(); state.analyses.clear();
   for (const tk of data.tickers) state.map.set(tk.s, tk);
+  // Schlagzeilen (optional — App funktioniert auch ohne)
+  try {
+    const rn = await fetch('data/news.json', { cache: 'no-cache' });
+    if (rn.ok) state.news = (await rn.json()).news || {};
+  } catch (e) { /* ohne News weiter */ }
   // Online nachgeladene Werte aus Cache wiederherstellen
   try {
     const cached = JSON.parse(localStorage.getItem('ss_ext') || '[]');
@@ -654,22 +706,34 @@ async function loadExternal(sym) {
 }
 
 /* ════════════════ Tipps ════════════════ */
-function computeTips() {
+const TIP_HORIZONS = { 30: '1 Monat', 180: '6 Monate', 365: '1 Jahr' };
+const TIP_LABEL = { 30: '1-Monats-Prognose', 180: '6-Monats-Prognose', 365: '1-Jahres-Prognose' };
+function computeTips(h) {
   const candidates = [];
   for (const tk of state.map.values()) {
     if (tk.type !== 'stock' && tk.type !== 'etf') continue;
     const a = analyze(tk.s);
-    if (!a || !a.fc) continue;
+    if (!a) continue;
     candidates.push({ tk, a });
   }
-  candidates.sort((x, y) => y.a.score - x.a.score);
+  candidates.sort((x, y) => y.a.scores[h] - x.a.scores[h]);
   const tips = [], used = new Set();
   for (const cand of candidates) {
     if (used.has(cand.tk.sec)) continue;
+    const fc = forecastOf(cand.tk.s);
+    if (!fc) continue;
+    cand.fc = fc;
     tips.push(cand); used.add(cand.tk.sec);
     if (tips.length === 3) break;
   }
   return tips;
+}
+// Lange Reihen für Sparklines ausdünnen
+function thin(arr, max) {
+  if (arr.length <= max) return arr;
+  const out = [];
+  for (let i = 0; i < max; i++) out.push(arr[Math.round(i * (arr.length - 1) / (max - 1))]);
+  return out;
 }
 
 /* ════════════════ Rendering: Bausteine ════════════════ */
@@ -694,6 +758,55 @@ function reasonsHTML(reasons, limit) {
   return `<ul class="reasons">${sel.map(r => `<li class="${r.s > 0 ? 'pos' : r.s < 0 ? 'neg' : 'neu'}">${r.s > 0 ? ICONS.up : r.s < 0 ? ICONS.down : ICONS.dot}<span>${esc(r.t)}</span></li>`).join('')}</ul>`;
 }
 
+/* ════════════════ Schlagzeilen + Stimmung ════════════════ */
+const SENT_POS = ['beat', 'beats', 'surge', 'surges', 'soar', 'soars', 'jump', 'jumps', 'rally', 'record', 'upgrade', 'upgraded', 'buy', 'outperform', 'growth', 'profit', 'strong', 'wins', 'gain', 'gains', 'bullish', 'raises', 'gewinn', 'steigt', 'steigen', 'rekord', 'übertrifft', 'kaufempfehlung', 'stark', 'wachstum', 'erholung', 'hoch'];
+const SENT_NEG = ['miss', 'misses', 'fall', 'falls', 'drop', 'drops', 'plunge', 'plunges', 'sink', 'sinks', 'slump', 'downgrade', 'downgraded', 'sell', 'lawsuit', 'weak', 'loss', 'losses', 'cut', 'cuts', 'bearish', 'warning', 'fear', 'fears', 'risk', 'verlust', 'sinkt', 'bricht', 'warnung', 'schwach', 'klage', 'risiko', 'crash', 'absturz', 'tief'];
+function sentimentOf(title) {
+  const words = title.toLowerCase().match(/[a-zäöüß]+/g) || [];
+  let s = 0;
+  for (const w of words) {
+    if (SENT_POS.includes(w)) s++;
+    if (SENT_NEG.includes(w)) s--;
+  }
+  return s > 0 ? 1 : s < 0 ? -1 : 0;
+}
+function timeAgo(ts) {
+  if (!ts) return '';
+  const m = Math.max(1, Math.round((Date.now() / 1000 - ts) / 60));
+  if (m < 60) return `vor ${m} Min.`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `vor ${h} Std.`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'gestern' : `vor ${d} Tagen`;
+}
+function newsHTML(tk) {
+  const gnews = `https://news.google.com/search?q=${encodeURIComponent(tk.n + ' Aktie')}&hl=de`;
+  const items = state.news[tk.s];
+  let inner;
+  if (items?.length) {
+    const sents = items.map(n => sentimentOf(n.t));
+    const pos = sents.filter(s => s > 0).length, neg = sents.filter(s => s < 0).length;
+    const mood = pos > neg ? ['eher positiv', 'up'] : neg > pos ? ['eher negativ', 'down'] : ['neutral', 'flat'];
+    inner = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <span style="font-size:.8rem;color:var(--text-2)">Stimmung der Überschriften</span>
+      <span class="pill ${mood[1]}">${mood[0]} (${pos}↑ ${neg}↓)</span>
+    </div>`;
+    inner += items.map((n, i) => `
+      <a class="newsItem" href="${esc(n.u)}" target="_blank" rel="noopener noreferrer">
+        <span class="ns ${sents[i] > 0 ? 'pos' : sents[i] < 0 ? 'neg' : 'neu'}">${sents[i] > 0 ? ICONS.up : sents[i] < 0 ? ICONS.down : ICONS.dot}</span>
+        <span class="nt">${esc(n.t)}<span class="nm">${esc(n.p)}${n.ts ? ' · ' + timeAgo(n.ts) : ''}</span></span>
+        <span class="nl">${ICONS.link}</span>
+      </a>`).join('');
+    inner += `<div class="fcsub" style="font-size:.7rem;color:var(--text-3);margin-top:8px">Stimmung = automatische Schlagwort-Einschätzung der Überschriften, keine inhaltliche Bewertung.</div>`;
+  } else {
+    inner = `<div class="empty" style="padding:10px 0">Keine aktuellen Schlagzeilen im Datenbestand.</div>`;
+  }
+  return `<div class="sectionTitle">Schlagzeilen</div>
+  <div class="card">${inner}
+    <a class="btn ghost" style="margin-top:10px;text-decoration:none" href="${gnews}" target="_blank" rel="noopener noreferrer">${ICONS.globe} Mehr bei Google News</a>
+  </div>`;
+}
+
 /* ════════════════ Rendering: Heute ════════════════ */
 function renderToday() {
   const el = $('#todayContent');
@@ -701,7 +814,9 @@ function renderToday() {
   const upd = new Date(state.data.updated * 1000);
   $('#todaySub').textContent = 'Datenstand: ' + upd.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ', ' + upd.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr';
   const indices = [...state.map.values()].filter(t => t.type === 'index');
-  const tips = computeTips();
+  const H = state.tipHorizon;
+  const tips = computeTips(H);
+  const fcSteps = Math.min(260, Math.round(H * 5 / 7));
   let html = `<div class="sectionTitle">Marktüberblick</div>
   <div class="idxScroll">${indices.map(ix => {
     const ch = dayChange(ix);
@@ -711,10 +826,13 @@ function renderToday() {
       ${ch != null ? `<span class="pill ${pctClass(ch)} num">${fmtPct(ch)}</span>` : ''}
     </div>`;
   }).join('')}</div>
-  <div class="sectionTitle">Tipps des Tages</div>`;
+  <div class="sectionTitle">Tipps des Tages</div>
+  <div class="seg" id="segTipH" role="group" aria-label="Anlagehorizont">
+    ${Object.entries(TIP_HORIZONS).map(([d, l]) => `<button data-th="${d}" class="${H === +d ? 'on' : ''}">${l}</button>`).join('')}
+  </div>`;
   tips.forEach((tip, i) => {
-    const { tk, a } = tip;
-    const h30 = a.fc.h[30];
+    const { tk, a, fc } = tip;
+    const h30 = fc.h[H];
     const ch = dayChange(tk);
     const per1000 = Math.round(1000 * h30.expRet);
     html += `<div class="card tip" data-sym="${esc(tk.s)}" role="button" tabindex="0">
@@ -722,7 +840,7 @@ function renderToday() {
         <div class="rank">${i + 1}</div>
         <div>
           <div class="tn">${esc(tk.n)}</div>
-          <div class="tm">${esc(tk.s)} · ${esc(tk.sec)} · Score ${a.score}</div>
+          <div class="tm">${esc(tk.s)} · ${esc(tk.sec)} · Score ${a.scores[H]}</div>
         </div>
         <div class="tr">
           <div class="price num" style="font-weight:600">${fmtPrice(tk.price, tk.cur)}</div>
@@ -732,7 +850,7 @@ function renderToday() {
       <canvas class="tipSpark"></canvas>
       <div class="fcline">
         <div>
-          <div class="fcmain num ${h30.expRet >= 0 ? 'up-t' : 'down-t'}">30-Tage-Prognose: ${fmtPct(h30.expRet)}</div>
+          <div class="fcmain num ${h30.expRet >= 0 ? 'up-t' : 'down-t'}">${TIP_LABEL[H]}: ${fmtPct(h30.expRet)}</div>
           <div class="fcsub num">Spanne ${fmtPct(h30.loRet)} bis ${fmtPct(h30.hiRet)} · ${per1000 >= 0 ? '+' : ''}${nf0.format(per1000)} € je 1.000 €</div>
         </div>
         <span class="pill ${h30.pUp >= 0.55 ? 'up' : h30.pUp <= 0.45 ? 'down' : 'flat'} num">Chance ${nf0.format(h30.pUp * 100)} %</span>
@@ -742,12 +860,19 @@ function renderToday() {
   });
   html += `<div class="disclaimer">Keine Anlageberatung. Alle Einschätzungen und Prognosen werden ausschließlich aus historischen Kursdaten berechnet (technische Analyse, Monte-Carlo-Simulation). Vergangene Entwicklungen sind kein verlässlicher Indikator für die Zukunft. Investitionen bergen Verlustrisiken.</div>`;
   el.innerHTML = html;
-  // Sparklines zeichnen
+  $('#segTipH').addEventListener('click', e => {
+    const b = e.target.closest('button[data-th]');
+    if (!b) return;
+    state.tipHorizon = +b.dataset.th;
+    renderToday();
+  });
+  // Sparklines zeichnen (Historie proportional zum Horizont, Prognose ausgedünnt)
   el.querySelectorAll('.card.tip').forEach(card => {
-    const a = analyze(card.dataset.sym);
+    const fc = forecastOf(card.dataset.sym);
     const tk = getTicker(card.dataset.sym);
     const cv = card.querySelector('canvas');
-    requestAnimationFrame(() => drawSparkline(cv, tk.c.slice(-66), a.fc.med.slice(0, 21)));
+    const hist = thin(tk.c.slice(-Math.max(66, fcSteps)), 66);
+    requestAnimationFrame(() => drawSparkline(cv, hist, thin(fc.med.slice(0, fcSteps), 33)));
   });
 }
 
@@ -810,7 +935,7 @@ function pfPosition(p) {
     valEur: rate != null ? val * rate : null,
     plAbs: val - cost, plPct: cost ? val / cost - 1 : 0,
     dayAbs: ch != null ? val * ch / (1 + ch) : null,
-    fc30: a?.fc ? a.fc.h[30].expRet : null,
+    fc30: a ? forecastOf(p.s)?.h[30].expRet ?? null : null,
   };
 }
 function renderPortfolio() {
@@ -887,7 +1012,7 @@ function renderDetail(sym) {
   const ch = dayChange(tk);
   const isWatched = state.watch.includes(sym);
   const canTrade = tk.type !== 'index' && tk.type !== 'fx';
-  const I = a?.I, fc = a?.fc;
+  const I = a?.I, fc = a ? forecastOf(sym) : null;
   const H = state.detailHorizon;
   const h = fc?.h[H];
   const sl = a ? scoreLabel(a.score) : null;
@@ -913,7 +1038,7 @@ function renderDetail(sym) {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
         <strong style="font-size:.95rem">Prognose</strong>
         <div class="seg" style="margin:0;width:200px" id="segHorizon" role="group" aria-label="Prognose-Horizont">
-          ${[7, 30, 90].map(d => `<button data-h="${d}" class="${H === d ? 'on' : ''}">${d} T</button>`).join('')}
+          ${[[30, '30 T'], [90, '90 T'], [180, '6 M'], [365, '1 J']].map(([d, l]) => `<button data-h="${d}" class="${H === d ? 'on' : ''}">${l}</button>`).join('')}
         </div>
       </div>
       <div class="fcgrid">
@@ -939,6 +1064,7 @@ function renderDetail(sym) {
       ${kpiHTML('Max. Verlust 1 J', fmtPct(I.mdd, false), 'größter Drawdown', 'down-t')}
       ${kpiHTML('Volumen-Trend', fmtPct(I.volTrend), '20 vs. 60 Tage', I.volTrend >= 0 ? 'up-t' : 'flat-t')}
     </div>` : '<div class="notice">' + ICONS.warn + '<span>Zu wenig Kurshistorie für eine Analyse.</span></div>'}
+    ${newsHTML(tk)}
     ${canTrade ? `<div class="detbtns"><button class="btn primary" id="btnToPf">${ICONS.plus} Ins Portfolio</button></div>` : ''}
     <div class="disclaimer">Keine Anlageberatung. Prognose und Score basieren ausschließlich auf historischen Kursdaten — sie sind keine verlässliche Vorhersage künftiger Entwicklungen.</div>`;
   // Chart
@@ -1043,6 +1169,43 @@ function buildPosModalHTML(presetSym, existing) {
       <button class="btn primary" id="posSave">Speichern</button>
     </div>`;
 }
+/* ════════════════ Push-Einrichtung (ntfy.sh) ════════════════ */
+function openPushModal() {
+  openModal(`<h3>Täglicher Tipp als Push</h3>
+    <p style="font-size:.86rem;color:var(--text-2);margin-bottom:12px">Jeden Morgen (~7:15 Uhr) schickt StockSense die 3 Tipps des Tages als Benachrichtigung aufs Handy — über den kostenlosen Dienst ntfy.sh, ganz ohne Konto.</p>
+    <ul class="steps">
+      <li><span class="stepN">1</span><span><strong>ntfy</strong>-App installieren (<a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener" style="color:var(--up)">Android</a> / <a href="https://apps.apple.com/app/ntfy/id1625396347" target="_blank" rel="noopener" style="color:var(--up)">iPhone</a>)</span></li>
+      <li><span class="stepN">2</span><span>In der App „Topic abonnieren“ wählen und diesen Namen eingeben:</span></li>
+    </ul>
+    <div class="topicBox"><span style="flex:1">${NTFY_TOPIC}</span><button class="iconbtn" id="btnCopyTopic" aria-label="Topic kopieren" style="width:36px;height:36px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+    <ul class="steps">
+      <li><span class="stepN">3</span><span>Fertig. Mit dem Test-Button prüfen, ob alles ankommt.</span></li>
+    </ul>
+    <p style="font-size:.72rem;color:var(--text-3);margin-bottom:12px">Hinweis: Das Topic ist öffentlich lesbar für jeden, der den Namen kennt — es enthält nur die Tipps, keine persönlichen Daten.</p>
+    <div class="modalbtns">
+      <button class="btn ghost" id="pushClose">Schließen</button>
+      <button class="btn primary" id="btnTestPush">Test senden</button>
+    </div>`);
+  $('#pushClose').addEventListener('click', closeModal);
+  $('#btnCopyTopic').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(NTFY_TOPIC); toast('Topic kopiert'); }
+    catch (e) { toast('Kopieren nicht möglich — bitte manuell markieren'); }
+  });
+  $('#btnTestPush').addEventListener('click', async () => {
+    const btn = $('#btnTestPush');
+    btn.disabled = true;
+    try {
+      const res = await fetch('https://ntfy.sh/' + NTFY_TOPIC, {
+        method: 'POST',
+        headers: { 'Title': 'StockSense - Testbenachrichtigung', 'Tags': 'white_check_mark' },
+        body: 'Push eingerichtet! Morgen frueh kommen hier die Tipps des Tages an.',
+      });
+      toast(res.ok ? 'Test gesendet — prüfe Dein Handy' : 'Senden fehlgeschlagen (' + res.status + ')');
+    } catch (e) { toast('Senden fehlgeschlagen — ntfy.sh nicht erreichbar'); }
+    btn.disabled = false;
+  });
+}
+
 function openModal(html) {
   $('#modal').innerHTML = html;
   $('#modalWrap').classList.add('open');
@@ -1093,6 +1256,7 @@ $('#searchInput').addEventListener('input', () => {
 });
 
 /* ════════════════ Init ════════════════ */
+$('#btnPush').addEventListener('click', openPushModal);
 $('#btnRefresh').addEventListener('click', async () => {
   toast('Aktualisiere Daten …');
   try { await loadUniverse(); route(); toast('Daten aktualisiert'); }
