@@ -1,4 +1,4 @@
-const CACHE = 'stocksense-v20260612b';
+const CACHE = 'stocksense-v20260612c';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

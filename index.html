@@ -313,6 +313,7 @@ const state = {
   detailHorizon: 30,
   tipHorizon: 30,
   news: {},
+  tipsLog: null,
 };
 const savePf = () => localStorage.setItem('ss_portfolio', JSON.stringify(state.portfolio));
 const saveWatch = () => localStorage.setItem('ss_watch', JSON.stringify(state.watch));
@@ -369,9 +370,10 @@ function computeIndicators(tk) {
   const mom = d => last >= d ? price / c[last - d] - 1 : null;
   const r60 = r.slice(-60);
   const annVol = r60.length >= 20 ? stddev(r60) * Math.sqrt(252) : null;
-  const hi52 = Math.max(...c), lo52 = Math.min(...c);
-  let peak = c[0], mdd = 0;
-  for (const x of c) { if (x > peak) peak = x; mdd = Math.min(mdd, x / peak - 1); }
+  const c52 = c.slice(-252); // 52 Wochen — Historie kann 2 Jahre umfassen
+  const hi52 = Math.max(...c52), lo52 = Math.min(...c52);
+  let peak = c52[0], mdd = 0;
+  for (const x of c52) { if (x > peak) peak = x; mdd = Math.min(mdd, x / peak - 1); }
   const avgV = (n, off = 0) => { const seg = v.slice(v.length - n - off, v.length - off); return seg.length ? mean(seg) : 0; };
   const v20 = avgV(20), v60 = avgV(60);
   const volTrend = v60 > 0 ? v20 / v60 - 1 : 0;
@@ -451,7 +453,9 @@ function computeForecast(tk, I) {
   const momDrift = I.mom3 != null ? Math.log(1 + I.mom3) / 63 : ewma;
   const mu = Math.max(-0.002, Math.min(0.002, 0.6 * ewma + 0.4 * momDrift));
   const sigma = stddev(r.slice(-60));
-  const STEPS = 261, PATHS = 600; // 261 Handelstage ≈ 365 Kalendertage
+  // Krypto handelt 7 Tage/Woche → 1 Schritt = 1 Kalendertag; Aktien/ETFs: 5/7
+  const f = tk.type === 'crypto' ? 1 : 5 / 7;
+  const STEPS = Math.ceil(365 * f) + 1, PATHS = 600;
   let seed = c.length * 31 + Math.round(price * 100);
   for (const ch of tk.s) seed = (seed * 33 + ch.charCodeAt(0)) | 0;
   const rnd = mulberry32(seed);
@@ -479,7 +483,7 @@ function computeForecast(tk, I) {
     hi.push(grid[s][Math.floor(PATHS * 0.8)]);
   }
   const horizon = days => {
-    const idx = Math.min(STEPS - 1, Math.max(0, Math.round(days * 5 / 7) - 1));
+    const idx = Math.min(STEPS - 1, Math.max(0, Math.round(days * f) - 1));
     const row = grid[idx];
     let cnt = 0;
     for (const x of row) if (x > price) cnt++;
@@ -490,7 +494,7 @@ function computeForecast(tk, I) {
       target: med[idx], pUp: cnt / PATHS, steps: idx + 1,
     };
   };
-  return { med, lo, hi, stepDays: 7 / 5, h: { 30: horizon(30), 90: horizon(90), 180: horizon(180), 365: horizon(365) } };
+  return { med, lo, hi, f, h: { 30: horizon(30), 90: horizon(90), 180: horizon(180), 365: horizon(365) } };
 }
 
 function computeReasons(tk, I) {
@@ -543,6 +547,47 @@ function forecastOf(sym) {
   if (!a.fc) a.fc = computeForecast(getTicker(sym), a.I);
   return a.fc;
 }
+
+/* ════════════════ Backtest: Trefferquote der Prognose ════════════════
+   Walk-Forward: Prognose an vergangenen Tagen nur mit damals verfügbaren
+   Daten erstellt (analytische Variante derselben GBM-Median-Formel) und
+   mit dem tatsächlichen Verlauf verglichen. */
+const Q95 = Math.pow(0.5, 1 / 95);
+function computeBacktest(tk, horizonDays) {
+  const c = tk.c;
+  const n = Math.max(1, Math.round(horizonDays * (tk.type === 'crypto' ? 1 : 5 / 7)));
+  if (c.length < 70 + n + 10) return null;
+  const r = [];
+  for (let i = 1; i < c.length; i++) r.push(Math.log(c[i] / c[i - 1]));
+  const sumDecay = (1 - Math.pow(Q95, n)) / (1 - Q95);
+  let tests = 0, dirHits = 0, bandHits = 0;
+  for (let t = 70; t + n < c.length; t += 5) {
+    let wsum = 0, msum = 0, w = 1;
+    for (let i = t - 1; i >= Math.max(0, t - 180); i--) { msum += r[i] * w; wsum += w; w *= 0.97; }
+    const ewma = msum / wsum;
+    const m3 = t >= 63 ? c[t] / c[t - 63] - 1 : null;
+    const momDrift = m3 != null ? Math.log(1 + m3) / 63 : ewma;
+    const mu = Math.max(-0.002, Math.min(0.002, 0.6 * ewma + 0.4 * momDrift));
+    const sigma = stddev(r.slice(Math.max(0, t - 60), t));
+    if (!isFinite(sigma) || sigma <= 0) continue;
+    const medLog = mu * sumDecay - sigma * sigma / 2 * n;
+    const sd = sigma * Math.sqrt(n);
+    const actLog = Math.log(c[t + n] / c[t]);
+    tests++;
+    if ((medLog >= 0) === (actLog >= 0)) dirHits++;
+    if (Math.abs(actLog - medLog) <= 0.8416 * sd) bandHits++;
+  }
+  if (tests < 8) return null;
+  return { tests, dir: dirHits / tests, band: bandHits / tests };
+}
+function backtestOf(sym, h) {
+  const a = analyze(sym);
+  if (!a) return null;
+  a.bt = a.bt || {};
+  if (!(h in a.bt)) a.bt[h] = computeBacktest(getTicker(sym), h);
+  return a.bt[h];
+}
+const hitClass = x => x >= 0.6 ? 'up' : x >= 0.45 ? 'flat' : 'down';
 function scoreLabel(s) {
   if (s >= 65) return { txt: 'Kaufsignal', cls: 'up' };
   if (s >= 45) return { txt: 'Halten', cls: 'flat' };
@@ -593,7 +638,7 @@ function drawSparkline(cv, hist, fcMed) {
 function drawDetailChart(cv, hist, fc, horizonDays) {
   const { ctx, w, h } = setupCanvas(cv);
   const padR = 46, padB = 20, padT = 8;
-  const steps = fc ? Math.min(fc.med.length, Math.max(1, Math.round(horizonDays * 5 / 7))) : 0;
+  const steps = fc ? Math.min(fc.med.length, Math.max(1, Math.round(horizonDays * fc.f))) : 0;
   const med = fc ? fc.med.slice(0, steps) : [], lo = fc ? fc.lo.slice(0, steps) : [], hi = fc ? fc.hi.slice(0, steps) : [];
   const histN = hist.c.length, totalN = histN + steps;
   const all = hist.c.concat(hi, lo);
@@ -667,11 +712,15 @@ async function loadUniverse() {
   state.data = data;
   state.map.clear(); state.analyses.clear();
   for (const tk of data.tickers) state.map.set(tk.s, tk);
-  // Schlagzeilen (optional — App funktioniert auch ohne)
+  // Schlagzeilen + Tipp-Protokoll (optional — App funktioniert auch ohne)
   try {
     const rn = await fetch('data/news.json', { cache: 'no-cache' });
     if (rn.ok) state.news = (await rn.json()).news || {};
   } catch (e) { /* ohne News weiter */ }
+  try {
+    const rl = await fetch('data/tips-log.json', { cache: 'no-cache' });
+    if (rl.ok) state.tipsLog = await rl.json();
+  } catch (e) { /* ohne Bilanz weiter */ }
   // Online nachgeladene Werte aus Cache wiederherstellen
   try {
     const cached = JSON.parse(localStorage.getItem('ss_ext') || '[]');
@@ -711,7 +760,7 @@ const TIP_LABEL = { 30: '1-Monats-Prognose', 180: '6-Monats-Prognose', 365: '1-J
 function computeTips(h) {
   const candidates = [];
   for (const tk of state.map.values()) {
-    if (tk.type !== 'stock' && tk.type !== 'etf') continue;
+    if (!['stock', 'etf', 'crypto'].includes(tk.type)) continue;
     const a = analyze(tk.s);
     if (!a) continue;
     candidates.push({ tk, a });
@@ -734,6 +783,41 @@ function thin(arr, max) {
   const out = [];
   for (let i = 0; i < max; i++) out.push(arr[Math.round(i * (arr.length - 1) / (max - 1))]);
   return out;
+}
+
+/* Bilanz der tatsächlich veröffentlichten Tages-Tipps (data/tips-log.json) */
+function tipsBalanceHTML() {
+  const entries = state.tipsLog?.entries;
+  if (!entries?.length) return '';
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = [];
+  let nTot = 0, nPos = 0, sum = 0;
+  for (const e of entries) {
+    for (const t of e.tips) {
+      const tk = getTicker(t.s);
+      if (!tk?.price || !t.price) continue;
+      const ret = tk.price / t.price - 1;
+      const isToday = e.d === today;
+      if (!isToday) { nTot++; if (ret > 0) nPos++; sum += ret; }
+      rows.push({ d: e.d, name: t.n, sym: t.s, ret, isToday });
+    }
+  }
+  if (!rows.length) return '';
+  rows.sort((a, b) => b.d.localeCompare(a.d));
+  const shown = rows.slice(0, 9);
+  const fmtD = d => d.slice(8, 10) + '.' + d.slice(5, 7) + '.';
+  const head = nTot
+    ? `<span class="num">${nTot} Tipps bisher · <span class="${nPos / nTot >= 0.5 ? 'up-t' : 'down-t'}">${nf0.format(nPos / nTot * 100)} % im Plus</span> · Ø ${fmtPct(sum / nTot)}</span>`
+    : 'Die Bilanz wächst ab morgen — jeder Tages-Tipp wird automatisch protokolliert und hier mit dem echten Verlauf verglichen.';
+  return `<div class="sectionTitle">Bilanz bisheriger Tipps</div>
+  <div class="card">
+    <div style="font-size:.84rem;color:var(--text-2);margin-bottom:${shown.length ? '10px' : '0'}">${head}</div>
+    ${shown.map(r => `<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--border);font-size:.85rem" data-sym="${esc(r.sym)}" role="button" tabindex="0">
+      <span style="color:var(--text-3)" class="num">${r.isToday ? 'heute' : fmtD(r.d)}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</span>
+      <span class="pill ${pctClass(r.ret)} num">${r.isToday ? 'neu' : fmtPct(r.ret)}</span>
+    </div>`).join('')}
+  </div>`;
 }
 
 /* ════════════════ Rendering: Bausteine ════════════════ */
@@ -816,7 +900,6 @@ function renderToday() {
   const indices = [...state.map.values()].filter(t => t.type === 'index');
   const H = state.tipHorizon;
   const tips = computeTips(H);
-  const fcSteps = Math.min(260, Math.round(H * 5 / 7));
   let html = `<div class="sectionTitle">Marktüberblick</div>
   <div class="idxScroll">${indices.map(ix => {
     const ch = dayChange(ix);
@@ -855,9 +938,14 @@ function renderToday() {
         </div>
         <span class="pill ${h30.pUp >= 0.55 ? 'up' : h30.pUp <= 0.45 ? 'down' : 'flat'} num">Chance ${nf0.format(h30.pUp * 100)} %</span>
       </div>
+      ${(() => {
+        const bt = backtestOf(tk.s, H);
+        return bt ? `<div class="fcsub num" style="margin:-4px 0 10px;color:var(--text-3);font-size:.78rem">Trefferquote dieser Prognose-Art bei ${esc(tk.n)}: <span class="${bt.dir >= 0.6 ? 'up-t' : bt.dir >= 0.45 ? 'flat-t' : 'down-t'}">${nf0.format(bt.dir * 100)} % Richtung</span> (${bt.tests} Tests)</div>` : '';
+      })()}
       ${reasonsHTML(a.reasons, 3)}
     </div>`;
   });
+  html += tipsBalanceHTML();
   html += `<div class="disclaimer">Keine Anlageberatung. Alle Einschätzungen und Prognosen werden ausschließlich aus historischen Kursdaten berechnet (technische Analyse, Monte-Carlo-Simulation). Vergangene Entwicklungen sind kein verlässlicher Indikator für die Zukunft. Investitionen bergen Verlustrisiken.</div>`;
   el.innerHTML = html;
   $('#segTipH').addEventListener('click', e => {
@@ -871,6 +959,7 @@ function renderToday() {
     const fc = forecastOf(card.dataset.sym);
     const tk = getTicker(card.dataset.sym);
     const cv = card.querySelector('canvas');
+    const fcSteps = Math.min(fc.med.length, Math.max(1, Math.round(H * fc.f)));
     const hist = thin(tk.c.slice(-Math.max(66, fcSteps)), 66);
     requestAnimationFrame(() => drawSparkline(cv, hist, thin(fc.med.slice(0, fcSteps), 33)));
   });
@@ -994,7 +1083,7 @@ function renderPortfolio() {
 }
 
 /* ════════════════ Rendering: Detail ════════════════ */
-const RANGES = { '1M': 22, '3M': 66, '6M': 132, '1J': 9999 };
+const RANGES = { '1M': 22, '3M': 66, '6M': 132, '1J': 252, 'Max': 9999 };
 function renderDetail(sym) {
   const el = $('#view-detail');
   const tk = getTicker(sym);
@@ -1049,6 +1138,21 @@ function renderDetail(sym) {
       </div>
       <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade) auf Basis von Drift und Volatilität der letzten 12 Monate.</div>
     </div>
+    ${(() => {
+      const bt = backtestOf(sym, H);
+      if (!bt) return '';
+      return `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <strong style="font-size:.95rem">Trefferquote (Backtest)</strong>
+          <span class="pill ${hitClass(bt.dir)} num">${nf0.format(bt.dir * 100)} %</span>
+        </div>
+        <div class="fcgrid" style="margin-top:0">
+          <div class="fcbox"><div class="l">Richtung richtig</div><div class="v num ${bt.dir >= 0.6 ? 'up-t' : bt.dir >= 0.45 ? '' : 'down-t'}">${nf0.format(bt.dir * 100)} %</div></div>
+          <div class="fcbox"><div class="l">Innerhalb der Spanne</div><div class="v num">${nf0.format(bt.band * 100)} %</div></div>
+        </div>
+        <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">${bt.tests} Walk-Forward-Tests über 2 Jahre: Prognose an vergangenen Tagen nur mit damals verfügbaren Daten erstellt und mit dem tatsächlichen Verlauf nach ${H} Tagen verglichen. Spanne sollte rechnerisch ~60 % treffen.</div>
+      </div>`;
+    })()}
     <div class="card">
       <strong style="font-size:.95rem;display:block;margin-bottom:10px">Warum diese Einschätzung?</strong>
       ${reasonsHTML(a.reasons)}

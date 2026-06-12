@@ -86,6 +86,9 @@ const UNIVERSE = [
   { s: 'EXS1.DE', n: 'iShares Core DAX', sec: 'ETF Europa', type: 'etf' },
   { s: 'EXSA.DE', n: 'iShares STOXX Europe 600', sec: 'ETF Europa', type: 'etf' },
   { s: '4GLD.DE', n: 'Xetra-Gold', sec: 'Gold', type: 'etf' },
+  // Krypto (EUR)
+  { s: 'BTC-EUR', n: 'Bitcoin', sec: 'Krypto', type: 'crypto' },
+  { s: 'ETH-EUR', n: 'Ethereum', sec: 'Krypto', type: 'crypto' },
   // Indizes (nur Markt-Überblick, keine Tipps)
   { s: '^GSPC', n: 'S&P 500', sec: 'Index', type: 'index' },
   { s: '^NDX', n: 'Nasdaq 100', sec: 'Index', type: 'index' },
@@ -106,7 +109,8 @@ function roundPrice(x) {
 }
 
 async function fetchTicker(def, attempt = 1) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(def.s)}?range=1y&interval=1d`;
+  // 2 Jahre Historie: nötig für Walk-Forward-Backtest (Trefferquote) bei langen Horizonten
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(def.s)}?range=2y&interval=1d`;
   try {
     const res = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

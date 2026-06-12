@@ -9,7 +9,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const universe = JSON.parse(readFileSync(join(ROOT, 'data', 'universe.json'), 'utf8'));
-const targets = universe.tickers.filter(t => t.type === 'stock' || t.type === 'etf' || t.type === 'index');
+const targets = universe.tickers.filter(t => ['stock', 'etf', 'index', 'crypto'].includes(t.type));
 
 async function fetchNews(query, tk) {
   const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=0&newsCount=8`;
