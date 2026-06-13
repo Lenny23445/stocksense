@@ -178,6 +178,71 @@ body{
 .steps .stepN{width:22px;height:22px;border-radius:50%;background:var(--up-bg);color:var(--up);font-weight:700;font-size:.75rem;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 
 .up-t{color:var(--up)}.down-t{color:var(--down)}.flat-t{color:var(--text-2)}
+
+/* ════════════════ Desktop / Tablet ════════════════
+   Wrapper sind am Handy „durchsichtig“ (display:contents) → Mobil-Layout
+   bleibt exakt wie es ist. Ab 900px wird daraus ein adaptives Raster-UI. */
+.tipGrid,.rowGrid,.posGrid{display:contents}
+
+@media (min-width:900px){
+  :root{--rail-w:92px}
+
+  /* Bottom-Tabbar → linke Navigations-Leiste */
+  #tabbar{
+    flex-direction:column;justify-content:flex-start;
+    top:0;bottom:auto;left:0;transform:none;
+    width:var(--rail-w);height:100vh;max-width:none;
+    border-top:none;border-right:1px solid var(--border);
+    background:var(--surface);backdrop-filter:none;-webkit-backdrop-filter:none;
+    padding:22px 0 0;gap:8px;display:flex!important;
+  }
+  #tabbar button{flex:0 0 auto;height:68px;border-radius:14px;margin:0 11px;gap:6px;transition:background .15s,color .15s}
+  #tabbar button.on{background:var(--up-bg)}
+
+  /* Inhalt füllt den Platz neben der Leiste, zentriert */
+  #app{max-width:none;margin:0;min-height:100vh;padding-left:var(--rail-w)}
+  .view{max-width:1120px;margin:0 auto;padding:8px 36px 56px}
+  .head{padding-top:26px}
+  .head h1{font-size:1.7rem}
+
+  /* Marktüberblick: umbrechendes Raster statt Querscroll */
+  .idxScroll{flex-wrap:wrap;overflow:visible;margin:0;padding:0}
+  .idxCard{min-width:0;flex:1 1 150px}
+
+  /* Tipps des Tages: mehrspaltig */
+  .tipGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px;align-items:start}
+  .tip canvas{height:90px}
+
+  /* Positionen, Watchlist & Suche: zweispaltig */
+  .rowGrid,.posGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+
+  /* Detail: schmaler & lesbar, größerer Chart, breitere Kennzahl-Raster */
+  #view-detail{max-width:880px}
+  #detailChart{height:340px}
+  .fcgrid{grid-template-columns:repeat(4,1fr)}
+  .kgrid{grid-template-columns:repeat(4,1fr)}
+
+  /* Modal als zentrierter Dialog statt Bottom-Sheet */
+  #modalWrap{align-items:center;padding:20px}
+  #modal{border-radius:20px;max-width:460px;max-height:90dvh;animation:fadeIn .18s ease-out}
+
+  /* Toast neben der Leiste mittig */
+  #toast{left:calc(50% + var(--rail-w)/2)}
+}
+
+/* Ab ~1500px etwas mehr Luft */
+@media (min-width:1500px){
+  .view{max-width:1320px}
+}
+
+/* Hover nur auf Zeigergeräten (Desktop) — Touch bleibt unberührt */
+@media (min-width:900px) and (hover:hover){
+  .row:hover,.idxCard:hover{background:var(--surface-2)}
+  .card.tip{transition:transform .12s ease,border-color .12s}
+  .card.tip:hover{transform:translateY(-2px);border-color:#3a4054}
+  #tabbar button:hover{color:var(--text)}
+  .newsItem:hover .nt{color:var(--up)}
+}
 </style>
 </head>
 <body>
@@ -913,6 +978,7 @@ function renderToday() {
   <div class="seg" id="segTipH" role="group" aria-label="Anlagehorizont">
     ${Object.entries(TIP_HORIZONS).map(([d, l]) => `<button data-th="${d}" class="${H === +d ? 'on' : ''}">${l}</button>`).join('')}
   </div>`;
+  html += '<div class="tipGrid">';
   tips.forEach((tip, i) => {
     const { tk, a, fc } = tip;
     const h30 = fc.h[H];
@@ -945,6 +1011,7 @@ function renderToday() {
       ${reasonsHTML(a.reasons, 3)}
     </div>`;
   });
+  html += '</div>';
   html += tipsBalanceHTML();
   html += `<div class="disclaimer">Keine Anlageberatung. Alle Einschätzungen und Prognosen werden ausschließlich aus historischen Kursdaten berechnet (technische Analyse, Monte-Carlo-Simulation). Vergangene Entwicklungen sind kein verlässlicher Indikator für die Zukunft. Investitionen bergen Verlustrisiken.</div>`;
   el.innerHTML = html;
@@ -979,7 +1046,7 @@ function renderSearch() {
   } else {
     list.sort((a, b) => (analyze(b.s)?.score ?? 0) - (analyze(a.s)?.score ?? 0));
   }
-  let html = list.map(t => rowHTML(t)).join('');
+  let html = list.length ? '<div class="rowGrid">' + list.map(t => rowHTML(t)).join('') + '</div>' : '';
   if (q.length >= 2) {
     html += `<button class="btn ghost" id="btnOnlineSearch" style="margin-top:10px">${ICONS.globe} Online nach „${esc(q)}“ suchen</button>`;
   }
@@ -995,7 +1062,7 @@ async function onlineSearch(q) {
     const quotes = (json.quotes || []).filter(x => x.symbol && (x.quoteType === 'EQUITY' || x.quoteType === 'ETF' || x.quoteType === 'INDEX'));
     if (!quotes.length) { toast('Keine Online-Treffer gefunden.'); renderSearch(); return; }
     const el = $('#searchResults');
-    el.innerHTML = '<div class="sectionTitle">Online-Treffer</div>' + quotes.map(x => `
+    el.innerHTML = '<div class="sectionTitle">Online-Treffer</div><div class="rowGrid">' + quotes.map(x => `
       <div class="row" data-extsym="${esc(x.symbol)}" role="button" tabindex="0">
         <div class="avatar" style="background:${avatarColor(x.symbol)}33;color:${avatarColor(x.symbol)}">${esc(initials(x.shortname || x.symbol))}</div>
         <div class="mid">
@@ -1003,7 +1070,7 @@ async function onlineSearch(q) {
           <div class="meta">${esc(x.symbol)} · ${esc(x.exchDisp || x.exchange || '')}</div>
         </div>
         <div class="right"><span class="pill flat">Laden</span></div>
-      </div>`).join('');
+      </div>`).join('') + '</div>';
   } catch (e) {
     toast('Online-Suche derzeit nicht erreichbar — bitte später erneut versuchen.');
     renderSearch();
@@ -1056,7 +1123,7 @@ function renderPortfolio() {
   }
   html += `<button class="btn primary" id="btnAddPos">${ICONS.plus} Position hinzufügen</button>`;
   if (positions.length) {
-    html += '<div class="sectionTitle">Positionen</div>';
+    html += '<div class="sectionTitle">Positionen</div><div class="posGrid">';
     html += positions.map(x => `
       <div class="row" data-sym="${esc(x.tk.s)}" role="button" tabindex="0">
         <div class="avatar" style="background:${avatarColor(x.tk.s)}33;color:${avatarColor(x.tk.s)}">${esc(initials(x.tk.n))}</div>
@@ -1069,14 +1136,14 @@ function renderPortfolio() {
           <span class="pill ${pctClass(x.plPct)} num">${fmtPct(x.plPct)}</span>
         </div>
         <button class="iconbtn editPos" data-edit="${esc(x.tk.s)}" aria-label="Position bearbeiten" style="width:38px;height:38px">${ICONS.pencil}</button>
-      </div>`).join('');
+      </div>`).join('') + '</div>';
   } else {
     html += '<div class="empty">Füge Deine erste Position hinzu, um Depotwert, Gewinn und Prognose zu sehen.</div>';
   }
   const watchRows = state.watch.map(getTicker).filter(Boolean);
   html += '<div class="sectionTitle">Watchlist</div>';
   html += watchRows.length
-    ? watchRows.map(t => rowHTML(t)).join('')
+    ? '<div class="posGrid">' + watchRows.map(t => rowHTML(t)).join('') + '</div>'
     : '<div class="empty">Noch leer — markiere Werte mit dem Stern in der Detailansicht.</div>';
   el.innerHTML = html;
   $('#btnAddPos').addEventListener('click', () => openPosModal());
