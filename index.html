@@ -86,6 +86,37 @@ body{
 .reasons li.neg svg{color:var(--down)}
 .reasons li.neu svg{color:var(--text-3)}
 
+/* ── Klartext-Urteil (Ampel) ── */
+.verdict{border-left:4px solid var(--border)}
+.verdict.up{border-left-color:var(--up)}
+.verdict.warn{border-left-color:var(--warn)}
+.verdict.down{border-left-color:var(--down)}
+.vbadge{display:inline-flex;align-items:center;gap:7px;font-size:1.05rem;font-weight:800;letter-spacing:.03em;padding:7px 15px;border-radius:11px}
+.vbadge svg{width:18px;height:18px}
+.vbadge.up{background:var(--up-bg);color:var(--up)}
+.vbadge.warn{background:var(--warn-bg);color:var(--warn)}
+.vbadge.down{background:var(--down-bg);color:var(--down)}
+.vsentence{font-size:.98rem;line-height:1.6;color:var(--text);margin:12px 0 10px}
+.vsentence b{font-weight:700}
+.vchips{display:flex;gap:8px;flex-wrap:wrap}
+.vtodo{font-size:.86rem;color:var(--text-2);margin-top:11px;display:flex;gap:7px;align-items:flex-start}
+.vtodo svg{width:15px;height:15px;flex-shrink:0;margin-top:2px;color:var(--text-3)}
+
+/* ── Einklappbare Profi-Details ── */
+.chev{width:9px;height:9px;border-right:2px solid var(--text-3);border-bottom:2px solid var(--text-3);transform:rotate(45deg);transition:transform .2s;flex-shrink:0}
+details.more[open]>summary .chev{transform:rotate(-135deg)}
+details.more>summary{list-style:none;cursor:pointer;font-weight:600;font-size:.9rem;color:var(--text-2);display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px}
+details.more>summary::-webkit-details-marker{display:none}
+details.more>summary:active{opacity:.7}
+/* Variante in Tipp-Karte: Trennlinie, Inhalt bündig zur Karte */
+details.more.inline{border-top:1px solid var(--border);margin:12px -16px -16px}
+details.more.inline>summary{padding:12px 16px}
+details.more.inline .moreBody{padding:0 16px 14px}
+/* Variante Detailseite: Button-Leiste, Karten in voller Breite */
+details.more.sheet{margin:10px 0 0}
+details.more.sheet>summary{padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)}
+details.more.sheet .moreBody{padding:14px 0 0}
+
 /* ── Suche ── */
 .searchbox{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0 14px;margin-bottom:14px}
 .searchbox svg{width:18px;height:18px;color:var(--text-3);flex-shrink:0}
@@ -376,6 +407,7 @@ const state = {
   watch: JSON.parse(localStorage.getItem('ss_watch') || '[]'),
   detailRange: '3M',
   detailHorizon: 30,
+  detailMore: false,
   tipHorizon: 30,
   searchSort: 'score',
   intra: new Map(),    // Symbol → Intraday-Tagesverlauf ('loading' | null | {t,c,prev,cur})
@@ -756,6 +788,50 @@ function scoreLabel(s) {
   if (s >= 45) return { txt: 'Halten', cls: 'flat' };
   return { txt: 'Schwach', cls: 'down' };
 }
+
+/* ════════════════ Klartext-Urteil: Ampel + einfacher Satz ════════════════
+   Übersetzt Score + Prognose in ein leicht verständliches Urteil (KAUFEN /
+   BEOBACHTEN / MEIDEN) plus einen Satz in Alltagssprache. Die fachliche
+   Begründung bleibt vollständig erhalten — nur eingeklappt darunter. */
+const HWORD = { 30: 'im nächsten Monat', 90: 'in den nächsten 3 Monaten', 180: 'in den nächsten 6 Monaten', 365: 'im nächsten Jahr' };
+const VERDICT = {
+  2: { key: 'KAUFEN',     cls: 'up',   icon: ICONS.up,   todo: 'Aussichtsreicher Kandidat fürs Portfolio.' },
+  1: { key: 'BEOBACHTEN', cls: 'warn', icon: ICONS.dot,  todo: 'Kein klares Signal — eher noch abwarten.' },
+  0: { key: 'MEIDEN',     cls: 'down', icon: ICONS.down, todo: 'Aktuell eher nicht zum Kauf geeignet.' },
+};
+// Score gibt die Grundtendenz, die Prognose (erwartete Rendite + Steigchance) korrigiert die Ränder.
+function verdictLevel(score, h) {
+  let lvl = score >= 62 ? 2 : score >= 45 ? 1 : 0;
+  if (h) {
+    if (lvl === 2 && (h.expRet < 0 || h.pUp < 0.50)) lvl = 1;          // gute Technik, aber Prognose mau
+    else if (lvl === 1 && h.expRet > 0.02 && h.pUp >= 0.58) lvl = 2;   // solide + klar positive Prognose
+    if (lvl === 1 && (h.expRet < -0.02 || h.pUp < 0.42)) lvl = 0;      // Prognose klar negativ
+  }
+  return lvl;
+}
+function plainSentence(h, H) {
+  const r = h.expRet, eur = Math.round(1000 * (1 + r)), pUp = Math.round(h.pUp * 100);
+  const w = HWORD[H] || ('in ' + H + ' Tagen');
+  if (r >= 0.005)  return `Könnte ${w} um etwa <b>${fmtPct(r)}</b> steigen — aus 1.000 € würden im Schnitt ca. <b>${nf0.format(eur)} €</b>. Chance, dass der Kurs steigt: <b>${pUp} %</b>.`;
+  if (r <= -0.005) return `Dürfte ${w} eher <b>fallen</b> (etwa ${fmtPct(r)}) — aus 1.000 € würden im Schnitt ca. <b>${nf0.format(eur)} €</b>. Chance zu steigen: nur <b>${pUp} %</b>.`;
+  return `Dürfte ${w} ungefähr <b>gleich bleiben</b> (${fmtPct(r)}). Chance zu steigen: <b>${pUp} %</b>.`;
+}
+// Bausteine des Urteilsblocks — von Tipp-Karte und Detailseite gemeinsam genutzt.
+function verdictBody(a, fc, H, tk) {
+  const h = fc && fc.h ? fc.h[H] : null;
+  const lvl = verdictLevel(a.scores[H], h);
+  const V = VERDICT[lvl];
+  return {
+    lvl, V,
+    badge: `<div class="vbadge ${V.cls}">${V.icon}${V.key}</div>`,
+    sentence: h ? `<div class="vsentence">${plainSentence(h, H)}</div>` : '',
+    chips: h ? `<div class="vchips">
+      <span class="pill ${h.pUp >= 0.55 ? 'up' : h.pUp <= 0.45 ? 'down' : 'flat'} num">Chance steigt ${Math.round(h.pUp * 100)} %</span>
+      <span class="pill flat num">Kursziel ~${fmtPrice(h.target, tk.cur)}</span>
+    </div>` : '',
+    todo: `<div class="vtodo">${ICONS.dot}<span>${V.todo}</span></div>`,
+  };
+}
 function dayChange(tk) {
   if (tk.price == null || tk.prev == null || !tk.prev) return null;
   return tk.price / tk.prev - 1;
@@ -981,24 +1057,46 @@ async function loadExternal(sym) {
 /* ════════════════ Tipps ════════════════ */
 const TIP_HORIZONS = { 30: '1 Monat', 180: '6 Monate', 365: '1 Jahr' };
 const TIP_LABEL = { 30: '1-Monats-Prognose', 180: '6-Monats-Prognose', 365: '1-Jahres-Prognose' };
+/* Horizont-abhängiges Tipp-Ranking. Wichtig: die Prognose-Drift ist in der Engine auf
+   ±0,2 %/Tag gedeckelt → fast alle starken Werte haben praktisch dieselbe erwartete
+   Rendite, eine Sortierung danach trennt sie kaum. Stattdessen entscheidet hier, was den
+   jeweiligen Zeitraum wirklich ausmacht: kurzfristig das frische Momentum, langfristig der
+   nachhaltige Trend abzüglich Risiko (Volatilität + größter Rückschlag). So stehen je
+   Zeitraum andere Werte oben — 1 Monat = heiße Momentum-Werte, 1 Jahr = ruhige Trendwerte. */
+function tipRankKey(I, H) {
+  if (!I || !I.returns || I.returns.length < 40) return null;
+  const longness = Math.min(1, Math.max(0, (H - 30) / 335));  // 0 bei 1 M … 1 bei 1 J
+  const m1 = I.mom1 || 0, m3 = I.mom3 || 0;
+  const vol = I.annVol || 0.3, mdd = Math.abs(I.mdd || 0);
+  const trend = I.sma200 != null ? I.price / I.sma200 - 1 : (I.mom6 || 0);
+  const shortSig = 0.7 * m1 + 0.3 * m3;                       // frisches Momentum
+  const longSig = trend - 0.6 * vol - 0.5 * mdd;              // Trend minus Risiko
+  return (1 - longness) * shortSig + longness * longSig;
+}
 function computeTips(h) {
   const candidates = [];
   for (const tk of state.map.values()) {
     if (!['stock', 'etf', 'crypto'].includes(tk.type)) continue;
     const a = analyze(tk.s);
     if (!a) continue;
-    candidates.push({ tk, a });
+    if (a.scores[h] < 40) continue;                           // technisch klar schwache Werte raus
+    const key = tipRankKey(a.I, h);
+    if (key == null) continue;
+    candidates.push({ tk, a, key });
   }
-  candidates.sort((x, y) => y.a.scores[h] - x.a.scores[h]);
+  candidates.sort((x, y) => y.key - x.key || y.a.scores[h] - x.a.scores[h]);
   const tips = [], used = new Set();
   for (const cand of candidates) {
-    if (used.has(cand.tk.sec)) continue;
+    if (used.has(cand.tk.sec)) continue;                      // je Branche nur den besten Wert
     const fc = forecastOf(cand.tk.s);
     if (!fc) continue;
     cand.fc = fc;
     tips.push(cand); used.add(cand.tk.sec);
     if (tips.length === 3) break;
   }
+  // Endreihenfolge nach erwarteter Rendite des Zeitraums, damit Rang 1–3 zu den
+  // angezeigten Prozentzahlen passt.
+  tips.sort((x, y) => y.fc.h[h].expRet - x.fc.h[h].expRet);
   return tips;
 }
 // Lange Reihen für Sparklines ausdünnen
@@ -1234,40 +1332,38 @@ function renderToday() {
     const { tk, a, fc } = tip;
     const h30 = fc.h[H];
     const ch = dayChange(tk);
-    const per1000 = Math.round(1000 * h30.expRet);
+    const vb = verdictBody(a, fc, H, tk);
     // Chance/Risiko-Verhältnis: möglicher Gewinn (oberes Band) je Einheit Verlustrisiko (unteres Band)
     const crv = h30.loRet < 0 ? h30.hiRet / -h30.loRet : 9;
     const crvTxt = crv >= 9 ? '>9' : crv.toFixed(1).replace('.', ',');
     const crvCls = crv >= 1.5 ? 'up-t' : crv >= 1 ? 'flat-t' : 'down-t';
-    html += `<div class="card tip" data-sym="${esc(tk.s)}" role="button" tabindex="0">
+    const tp = tradePlan(a.I, fc, H);
+    const bt = backtestOf(tk.s, H);
+    html += `<div class="card tip verdict ${vb.V.cls}" data-sym="${esc(tk.s)}" role="button" tabindex="0">
       <div class="tiphead">
         <div class="rank">${i + 1}</div>
         <div>
           <div class="tn">${esc(tk.n)}</div>
-          <div class="tm">${esc(tk.s)} · ${esc(tk.sec)} · Score ${a.scores[H]}</div>
+          <div class="tm">${esc(tk.s)} · ${esc(tk.sec)}</div>
         </div>
         <div class="tr">
           <div class="price num" style="font-weight:600">${fmtPrice(tk.price, tk.cur)}</div>
           ${ch != null ? `<span class="pill ${pctClass(ch)} num">${fmtPct(ch)}</span>` : ''}
         </div>
       </div>
+      ${vb.badge}
       <canvas class="tipSpark"></canvas>
-      <div class="fcline">
-        <div>
-          <div class="fcmain num ${h30.expRet >= 0 ? 'up-t' : 'down-t'}">${TIP_LABEL[H]}: ${fmtPct(h30.expRet)}</div>
-          <div class="fcsub num">Spanne ${fmtPct(h30.loRet)} bis ${fmtPct(h30.hiRet)} · ${per1000 >= 0 ? '+' : ''}${nf0.format(per1000)} € je 1.000 € · Chance/Risiko <span class="${crvCls}">${crvTxt}</span></div>
+      ${vb.sentence}
+      ${vb.chips}
+      <details class="more inline">
+        <summary>Mehr Details<span class="chev"></span></summary>
+        <div class="moreBody">
+          <div class="fcsub num" style="margin-bottom:8px">Mögliche Spanne ${fmtPct(h30.loRet)} bis ${fmtPct(h30.hiRet)} · Chance/Risiko <span class="${crvCls}">${crvTxt}</span> · Score ${a.scores[H]}/100</div>
+          ${tp ? `<div class="fcsub num" style="margin-bottom:8px">Kaufzone ${fmtPrice(tp.entryLo, tk.cur)}–${fmtPrice(tp.entryHi, tk.cur)} · Ziel ${fmtPrice(tp.target, tk.cur)} · Stop ${fmtPrice(tp.stop, tk.cur)}</div>` : ''}
+          ${bt ? `<div class="fcsub num" style="margin-bottom:10px;color:var(--text-3)">Trefferquote dieser Prognose-Art: <span class="${bt.dir >= 0.6 ? 'up-t' : bt.dir >= 0.45 ? 'flat-t' : 'down-t'}">${nf0.format(bt.dir * 100)} % Richtung</span> (${bt.tests} Tests)</div>` : ''}
+          ${reasonsHTML(a.reasons, 3)}
         </div>
-        <span class="pill ${h30.pUp >= 0.55 ? 'up' : h30.pUp <= 0.45 ? 'down' : 'flat'} num">Chance ${nf0.format(h30.pUp * 100)} %</span>
-      </div>
-      ${(() => {
-        const tp = tradePlan(a.I, fc, H);
-        return tp ? `<div class="fcsub num" style="margin:2px 0 8px;font-size:.78rem">Kaufzone ${fmtPrice(tp.entryLo, tk.cur)}–${fmtPrice(tp.entryHi, tk.cur)} · Ziel ${fmtPrice(tp.target, tk.cur)} · Stop ${fmtPrice(tp.stop, tk.cur)}</div>` : '';
-      })()}
-      ${(() => {
-        const bt = backtestOf(tk.s, H);
-        return bt ? `<div class="fcsub num" style="margin:-4px 0 10px;color:var(--text-3);font-size:.78rem">Trefferquote dieser Prognose-Art bei ${esc(tk.n)}: <span class="${bt.dir >= 0.6 ? 'up-t' : bt.dir >= 0.45 ? 'flat-t' : 'down-t'}">${nf0.format(bt.dir * 100)} % Richtung</span> (${bt.tests} Tests)</div>` : '';
-      })()}
-      ${reasonsHTML(a.reasons, 3)}
+      </details>
     </div>`;
   });
   html += '</div>';
@@ -1511,13 +1607,13 @@ function renderDetail(sym) {
   const I = a?.I, fc = a ? forecastOf(sym) : null;
   const H = state.detailHorizon;
   const h = fc?.h[H];
-  const sl = a ? scoreLabel(a.score) : null;
+  const vb = a ? verdictBody(a, fc, H, tk) : null;
   el.innerHTML = `
     <div class="dethead">
       <button class="iconbtn" id="btnBack" aria-label="Zurück">${ICONS.back}</button>
       <div class="titles">
         <div class="t1">${esc(tk.n)}</div>
-        <div class="t2">${esc(tk.s)} · ${esc(tk.sec)}${sl ? ` · Score ${a.score} (${sl.txt})` : ''}</div>
+        <div class="t2">${esc(tk.s)} · ${esc(tk.sec)}</div>
       </div>
       ${canTrade ? `<button class="iconbtn ${isWatched ? 'starred' : ''}" id="btnStar" aria-label="${isWatched ? 'Von Watchlist entfernen' : 'Zur Watchlist hinzufügen'}">${ICONS.star(isWatched)}</button>` : ''}
     </div>
@@ -1525,77 +1621,89 @@ function renderDetail(sym) {
       <div class="p num">${fmtPrice(tk.price, tk.cur)}</div>
       <div class="c">${ch != null ? `<span class="pill ${pctClass(ch)} num">${fmtPct(ch)} heute</span>` : ''}</div>
     </div>
+    ${vb ? `
+    <div class="card verdict ${vb.V.cls}">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px">
+        ${vb.badge}
+        <div class="seg" style="margin:0;width:188px;flex-shrink:0" id="segHorizon" role="group" aria-label="Zeitraum der Prognose">
+          ${[[30, '1 M'], [90, '3 M'], [180, '6 M'], [365, '1 J']].map(([d, l]) => `<button data-h="${d}" class="${H === d ? 'on' : ''}">${l}</button>`).join('')}
+        </div>
+      </div>
+      ${vb.sentence}
+      ${vb.chips}
+      ${vb.todo}
+    </div>` : ''}
     <canvas id="detailChart"></canvas>
     <div class="seg" id="segRange" role="group" aria-label="Zeitraum">
       ${Object.keys(RANGES).map(r => `<button data-r="${r}" class="${state.detailRange === r ? 'on' : ''}">${r}</button>`).join('')}
     </div>
-    ${fc ? `
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-        <strong style="font-size:.95rem">Prognose</strong>
-        <div class="seg" style="margin:0;width:200px" id="segHorizon" role="group" aria-label="Prognose-Horizont">
-          ${[[30, '30 T'], [90, '90 T'], [180, '6 M'], [365, '1 J']].map(([d, l]) => `<button data-h="${d}" class="${H === d ? 'on' : ''}">${l}</button>`).join('')}
-        </div>
-      </div>
-      <div class="fcgrid">
-        <div class="fcbox"><div class="l">Erwartung (Median)</div><div class="v num ${h.expRet >= 0 ? 'up-t' : 'down-t'}">${fmtPct(h.expRet)}</div></div>
-        <div class="fcbox"><div class="l">Kursziel (Median)</div><div class="v num">${fmtPrice(h.target, tk.cur)}</div></div>
-        <div class="fcbox"><div class="l">Spanne (20–80 %)</div><div class="v num" style="font-size:.9rem">${fmtPrice(h.lo, tk.cur)} – ${fmtPrice(h.hi, tk.cur)}</div></div>
-        <div class="fcbox"><div class="l">Chance steigend</div><div class="v num">${nf0.format(h.pUp * 100)} %</div></div>
-      </div>
-      <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade): Block-Bootstrap aus echten Tagesrenditen (fette Ränder, Vola-Cluster) plus seltene Student-t-Sprünge. Farbige Linie = realistischer Verlauf (hervorgehoben) · grau gestrichelt = Median-Erwartung im Hintergrund · Fläche = wahrscheinliche Spanne (20–80 %).</div>
-    </div>
-    ${canTrade ? tradePlanHTML(I, fc, H, tk.cur) : ''}
-    ${(() => {
-      const bt = backtestOf(sym, H);
-      if (!bt) return '';
-      return `<div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <strong style="font-size:.95rem">Trefferquote (Backtest)</strong>
-          <span class="pill ${hitClass(bt.dir)} num">${nf0.format(bt.dir * 100)} %</span>
-        </div>
-        <div class="fcgrid" style="margin-top:0">
-          <div class="fcbox"><div class="l">Richtung richtig</div><div class="v num ${bt.dir >= 0.6 ? 'up-t' : bt.dir >= 0.45 ? '' : 'down-t'}">${nf0.format(bt.dir * 100)} %</div></div>
-          <div class="fcbox"><div class="l">Innerhalb der Spanne</div><div class="v num">${nf0.format(bt.band * 100)} %</div></div>
-        </div>
-        <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">${bt.tests} Walk-Forward-Tests über 2 Jahre: Prognose an vergangenen Tagen nur mit damals verfügbaren Daten erstellt und mit dem tatsächlichen Verlauf nach ${H} Tagen verglichen. Spanne sollte rechnerisch ~60 % treffen.</div>
-      </div>`;
-    })()}
-    ${(() => {
-      const chk = canTrade ? checkOf(sym, H) : null;
-      if (!chk) return '';
-      const lbl = { 30: '30 Tage', 90: '90 Tage', 180: '6 Monate', 365: '1 Jahr' }[H] || H + ' Tage';
-      const aDate = new Date(chk.anchorTs * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
-      return `<div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <strong style="font-size:.95rem">Prognose-Rückblick</strong>
-          <span class="pill ${chk.inBand ? 'up' : 'down'} num">${chk.inBand ? 'in der Spanne' : 'außerhalb'}</span>
-        </div>
-        <canvas id="checkChart" style="width:100%;height:170px;display:block;margin-top:4px"></canvas>
-        <div class="fcgrid" style="margin-top:8px">
-          <div class="fcbox"><div class="l">Damals vorhergesagt</div><div class="v num ${chk.predRet >= 0 ? 'up-t' : 'down-t'}">${fmtPct(chk.predRet)}</div></div>
-          <div class="fcbox"><div class="l">Tatsächlich eingetreten</div><div class="v num ${chk.actRet >= 0 ? 'up-t' : 'down-t'}">${fmtPct(chk.actRet)}</div></div>
-        </div>
-        <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Prognose vom ${aDate} für ${lbl}, nur mit damals verfügbaren Daten gerechnet (gleiche Engine). Farbige Linie = echter Verlauf, grau gestrichelt + Fläche = die damalige Prognose. So siehst Du selbst, wie gut sie war.</div>
-      </div>`;
-    })()}
-    <div class="card">
-      <strong style="font-size:.95rem;display:block;margin-bottom:10px">Warum diese Einschätzung?</strong>
-      ${reasonsHTML(a.reasons)}
-    </div>
-    ${rangeBarHTML(I, tk.cur)}
-    <div class="sectionTitle">Kennzahlen</div>
-    <div class="kgrid">
-      ${kpiHTML('RSI (14)', I.rsi != null ? nf0.format(I.rsi) : '–', I.rsi >= 70 ? 'überkauft' : I.rsi <= 30 ? 'überverkauft' : 'neutral', I.rsi >= 70 ? 'down-t' : I.rsi <= 30 ? 'up-t' : 'flat-t')}
-      ${kpiHTML('MACD', I.macd != null ? (I.macd > I.macdSig ? 'über Signal' : 'unter Signal') : '–', 'kurzfr. Momentum', I.macd > I.macdSig ? 'up-t' : 'down-t')}
-      ${kpiHTML('Volatilität p. a.', I.annVol != null ? nf0.format(I.annVol * 100) + ' %' : '–', I.annVol < 0.25 ? 'niedrig–moderat' : I.annVol < 0.45 ? 'erhöht' : 'hoch', I.annVol < 0.25 ? 'up-t' : I.annVol < 0.45 ? 'flat-t' : 'down-t')}
-      ${kpiHTML('Momentum 3 M', fmtPct(I.mom3), '', I.mom3 >= 0 ? 'up-t' : 'down-t')}
-      ${kpiHTML('200-Tage-Linie', I.sma200 != null ? fmtPct(I.price / I.sma200 - 1) : '–', 'Abstand zum Kurs', I.sma200 != null && I.price >= I.sma200 ? 'up-t' : 'down-t')}
-      ${kpiHTML('52-Wochen-Hoch', fmtPct(I.distHi), 'Abstand', I.distHi > -0.05 ? 'up-t' : 'flat-t')}
-      ${kpiHTML('Max. Verlust 1 J', fmtPct(I.mdd, false), 'größter Drawdown', 'down-t')}
-      ${kpiHTML('Volumen-Trend', fmtPct(I.volTrend), '20 vs. 60 Tage', I.volTrend >= 0 ? 'up-t' : 'flat-t')}
-    </div>` : '<div class="notice">' + ICONS.warn + '<span>Zu wenig Kurshistorie für eine Analyse.</span></div>'}
     ${newsHTML(tk)}
+    ${fc ? `
+    <details class="more sheet" id="moreDetails" ${state.detailMore ? 'open' : ''}>
+      <summary><span>Details für Profis — Prognose, Kennzahlen &amp; Backtest</span><span class="chev"></span></summary>
+      <div class="moreBody">
+        <div class="card">
+          <strong style="font-size:.95rem;display:block;margin-bottom:10px">Prognose im Detail</strong>
+          <div class="fcgrid" style="margin-top:0">
+            <div class="fcbox"><div class="l">Erwartung (Median)</div><div class="v num ${h.expRet >= 0 ? 'up-t' : 'down-t'}">${fmtPct(h.expRet)}</div></div>
+            <div class="fcbox"><div class="l">Kursziel (Median)</div><div class="v num">${fmtPrice(h.target, tk.cur)}</div></div>
+            <div class="fcbox"><div class="l">Spanne (20–80 %)</div><div class="v num" style="font-size:.9rem">${fmtPrice(h.lo, tk.cur)} – ${fmtPrice(h.hi, tk.cur)}</div></div>
+            <div class="fcbox"><div class="l">Chance steigend</div><div class="v num">${nf0.format(h.pUp * 100)} %</div></div>
+          </div>
+          <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade): Block-Bootstrap aus echten Tagesrenditen (fette Ränder, Vola-Cluster) plus seltene Student-t-Sprünge. Farbige Linie = realistischer Verlauf (hervorgehoben) · grau gestrichelt = Median-Erwartung im Hintergrund · Fläche = wahrscheinliche Spanne (20–80 %).</div>
+        </div>
+        ${canTrade ? tradePlanHTML(I, fc, H, tk.cur) : ''}
+        ${(() => {
+          const bt = backtestOf(sym, H);
+          if (!bt) return '';
+          return `<div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <strong style="font-size:.95rem">Trefferquote (Backtest)</strong>
+              <span class="pill ${hitClass(bt.dir)} num">${nf0.format(bt.dir * 100)} %</span>
+            </div>
+            <div class="fcgrid" style="margin-top:0">
+              <div class="fcbox"><div class="l">Richtung richtig</div><div class="v num ${bt.dir >= 0.6 ? 'up-t' : bt.dir >= 0.45 ? '' : 'down-t'}">${nf0.format(bt.dir * 100)} %</div></div>
+              <div class="fcbox"><div class="l">Innerhalb der Spanne</div><div class="v num">${nf0.format(bt.band * 100)} %</div></div>
+            </div>
+            <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">${bt.tests} Walk-Forward-Tests über 2 Jahre: Prognose an vergangenen Tagen nur mit damals verfügbaren Daten erstellt und mit dem tatsächlichen Verlauf nach ${H} Tagen verglichen. Spanne sollte rechnerisch ~60 % treffen.</div>
+          </div>`;
+        })()}
+        ${(() => {
+          const chk = canTrade ? checkOf(sym, H) : null;
+          if (!chk) return '';
+          const lbl = { 30: '30 Tage', 90: '90 Tage', 180: '6 Monate', 365: '1 Jahr' }[H] || H + ' Tage';
+          const aDate = new Date(chk.anchorTs * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
+          return `<div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <strong style="font-size:.95rem">Prognose-Rückblick</strong>
+              <span class="pill ${chk.inBand ? 'up' : 'down'} num">${chk.inBand ? 'in der Spanne' : 'außerhalb'}</span>
+            </div>
+            <canvas id="checkChart" style="width:100%;height:170px;display:block;margin-top:4px"></canvas>
+            <div class="fcgrid" style="margin-top:8px">
+              <div class="fcbox"><div class="l">Damals vorhergesagt</div><div class="v num ${chk.predRet >= 0 ? 'up-t' : 'down-t'}">${fmtPct(chk.predRet)}</div></div>
+              <div class="fcbox"><div class="l">Tatsächlich eingetreten</div><div class="v num ${chk.actRet >= 0 ? 'up-t' : 'down-t'}">${fmtPct(chk.actRet)}</div></div>
+            </div>
+            <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Prognose vom ${aDate} für ${lbl}, nur mit damals verfügbaren Daten gerechnet (gleiche Engine). Farbige Linie = echter Verlauf, grau gestrichelt + Fläche = die damalige Prognose. So siehst Du selbst, wie gut sie war.</div>
+          </div>`;
+        })()}
+        <div class="card">
+          <strong style="font-size:.95rem;display:block;margin-bottom:10px">Warum diese Einschätzung? · Score ${a.scores[H]}/100</strong>
+          ${reasonsHTML(a.reasons)}
+        </div>
+        ${rangeBarHTML(I, tk.cur)}
+        <div class="sectionTitle">Kennzahlen</div>
+        <div class="kgrid">
+          ${kpiHTML('RSI (14)', I.rsi != null ? nf0.format(I.rsi) : '–', I.rsi >= 70 ? 'überkauft' : I.rsi <= 30 ? 'überverkauft' : 'neutral', I.rsi >= 70 ? 'down-t' : I.rsi <= 30 ? 'up-t' : 'flat-t')}
+          ${kpiHTML('MACD', I.macd != null ? (I.macd > I.macdSig ? 'über Signal' : 'unter Signal') : '–', 'kurzfr. Momentum', I.macd > I.macdSig ? 'up-t' : 'down-t')}
+          ${kpiHTML('Volatilität p. a.', I.annVol != null ? nf0.format(I.annVol * 100) + ' %' : '–', I.annVol < 0.25 ? 'niedrig–moderat' : I.annVol < 0.45 ? 'erhöht' : 'hoch', I.annVol < 0.25 ? 'up-t' : I.annVol < 0.45 ? 'flat-t' : 'down-t')}
+          ${kpiHTML('Momentum 3 M', fmtPct(I.mom3), '', I.mom3 >= 0 ? 'up-t' : 'down-t')}
+          ${kpiHTML('200-Tage-Linie', I.sma200 != null ? fmtPct(I.price / I.sma200 - 1) : '–', 'Abstand zum Kurs', I.sma200 != null && I.price >= I.sma200 ? 'up-t' : 'down-t')}
+          ${kpiHTML('52-Wochen-Hoch', fmtPct(I.distHi), 'Abstand', I.distHi > -0.05 ? 'up-t' : 'flat-t')}
+          ${kpiHTML('Max. Verlust 1 J', fmtPct(I.mdd, false), 'größter Drawdown', 'down-t')}
+          ${kpiHTML('Volumen-Trend', fmtPct(I.volTrend), '20 vs. 60 Tage', I.volTrend >= 0 ? 'up-t' : 'flat-t')}
+        </div>
+      </div>
+    </details>` : '<div class="notice">' + ICONS.warn + '<span>Zu wenig Kurshistorie für eine Analyse.</span></div>'}
     ${canTrade ? `<div class="detbtns"><button class="btn primary" id="btnToPf">${ICONS.plus} Ins Portfolio</button></div>` : ''}
     <div class="disclaimer">Keine Anlageberatung. Prognose und Score basieren ausschließlich auf historischen Kursdaten — sie sind keine verlässliche Vorhersage künftiger Entwicklungen.</div>`;
   // Chart
@@ -1607,12 +1715,17 @@ function renderDetail(sym) {
     const hist = { t: tk.t.slice(-n), c: tk.c.slice(-n) };
     requestAnimationFrame(() => drawDetailChart(cv, hist, fc, H));
   }
-  // Prognose-Rückblick-Chart
-  const chkCv = $('#checkChart');
-  if (chkCv) {
+  // Prognose-Rückblick-Chart: Canvas steckt im einklappbaren Profi-Bereich und
+  // hat geschlossen die Größe 0 → erst zeichnen, wenn er offen ist (initial + beim Aufklappen).
+  const moreEl = $('#moreDetails');
+  const drawCheck = () => {
+    const cc = $('#checkChart');
+    if (!cc) return;
     const chk = checkOf(sym, H);
-    if (chk) requestAnimationFrame(() => drawCheckChart(chkCv, chk));
-  }
+    if (chk) requestAnimationFrame(() => drawCheckChart(cc, chk));
+  };
+  if (!moreEl || moreEl.open) drawCheck();
+  moreEl?.addEventListener('toggle', () => { state.detailMore = moreEl.open; if (moreEl.open) drawCheck(); });
   // Events
   $('#btnBack').addEventListener('click', () => history.length > 1 ? history.back() : (location.hash = '#/'));
   $('#btnStar')?.addEventListener('click', () => {
@@ -1777,6 +1890,8 @@ document.querySelectorAll('#tabbar button').forEach(b =>
 
 /* Klick auf Zeilen/Karten → Detail */
 document.addEventListener('click', e => {
+  // „Mehr Details"-Aufklapper in einer Tipp-Karte darf NICHT zur Detailseite navigieren
+  if (e.target.closest('summary')) return;
   if (e.target.closest('.editPos')) {
     e.stopPropagation();
     openPosModal(e.target.closest('.editPos').dataset.edit);
