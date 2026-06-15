@@ -562,29 +562,32 @@ function computeForecast(tk, I) {
       grid[s][p] = x;
     }
   }
-  // Ein repräsentativer Beispielpfad (endet nahe Median, wackelt aber realistisch) —
-  // VOR dem Sortieren extrahieren, danach ist die Pfad-Identität weg.
-  const finalsSorted = grid[STEPS - 1].slice().sort((a, b) => a - b);
-  const medFinal = finalsSorted[Math.floor(PATHS * 0.5)];
-  let sp = 0, spDiff = Infinity;
-  for (let p = 0; p < PATHS; p++) { const d = Math.abs(grid[STEPS - 1][p] - medFinal); if (d < spDiff) { spDiff = d; sp = p; } }
-  const sample = grid.map(row => row[sp]);
+  // Perzentilbänder aus sortierten Kopien — grid bleibt unsortiert, damit
+  // einzelne Pfade später noch zuordenbar sind.
   const med = [], lo = [], hi = [];
   for (let s = 0; s < STEPS; s++) {
-    grid[s].sort((a, b) => a - b);
-    lo.push(grid[s][Math.floor(PATHS * 0.2)]);
-    med.push(grid[s][Math.floor(PATHS * 0.5)]);
-    hi.push(grid[s][Math.floor(PATHS * 0.8)]);
+    const col = grid[s].slice().sort((a, b) => a - b);
+    lo.push(col[Math.floor(PATHS * 0.2)]);
+    med.push(col[Math.floor(PATHS * 0.5)]);
+    hi.push(col[Math.floor(PATHS * 0.8)]);
   }
+  // Beispielpfad = realer Simulationspfad, der möglichst im 20–80-Band bleibt:
+  // wackelt realistisch, schießt aber nicht aus der angezeigten Spanne heraus.
+  let sp = 0, spBest = -1;
+  for (let p = 0; p < PATHS; p++) {
+    let inBand = 0;
+    for (let s = 0; s < STEPS; s++) { const x = grid[s][p]; if (x >= lo[s] && x <= hi[s]) inBand++; }
+    if (inBand > spBest) { spBest = inBand; sp = p; }
+  }
+  const sample = grid.map(row => row[sp]);
   const horizon = days => {
     const idx = Math.min(STEPS - 1, Math.max(0, Math.round(days * f) - 1));
-    const row = grid[idx];
     let cnt = 0;
-    for (const x of row) if (x > price) cnt++;
+    for (const x of grid[idx]) if (x > price) cnt++;
     return {
       expRet: med[idx] / price - 1,
-      lo: row[Math.floor(PATHS * 0.2)], hi: row[Math.floor(PATHS * 0.8)],
-      loRet: row[Math.floor(PATHS * 0.2)] / price - 1, hiRet: row[Math.floor(PATHS * 0.8)] / price - 1,
+      lo: lo[idx], hi: hi[idx],
+      loRet: lo[idx] / price - 1, hiRet: hi[idx] / price - 1,
       target: med[idx], pUp: cnt / PATHS, steps: idx + 1,
     };
   };
