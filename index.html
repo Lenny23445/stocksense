@@ -499,7 +499,7 @@ function computeScores(I) {
   return out;
 }
 
-/* Monte-Carlo-Prognose (GBM, deterministisch geseedet) */
+/* Monte-Carlo-Prognose (Block-Bootstrap realer Renditen + Student-t-Sprünge, deterministisch geseedet) */
 function mulberry32(seed) {
   return function () {
     seed |= 0; seed = seed + 0x6D2B79F5 | 0;
@@ -530,13 +530,34 @@ function computeForecast(tk, I) {
     while (v === 0) v = rnd();
     return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
   };
-  // Drift klingt mit Halbwertszeit ~95 Handelstagen ab — Momentum trägt nicht unbegrenzt
-  const muArr = Array.from({ length: STEPS }, (_, s) => mu * Math.pow(0.5, s / 95));
+  // Student-t (df=4), auf Einheitsvarianz normiert → fette Ränder für seltene Sprünge
+  const DF = 4, tNorm = Math.sqrt((DF - 2) / DF);
+  const studentT = () => {
+    let chi = 0;
+    for (let k = 0; k < DF; k++) { const g = gauss(); chi += g * g; }
+    return gauss() / Math.sqrt(chi / DF) * tNorm;
+  };
+  // Block-Bootstrap-Pool: reale Log-Renditen (max. letzte 504 ≈ 2 J), eigene Drift entfernt.
+  // Schocks aus echten Tagen erhalten fette Ränder, Vola-Cluster und Schiefe — anders als reines Gauss.
+  const pool = r.slice(-504), poolMean = mean(pool), dem = pool.map(x => x - poolMean);
+  const L = 5, JUMP_P = 0.012;            // Blocklänge erhält Vola-Cluster; ~1 % der Tage t-Sprung
+  const useBoot = dem.length >= L + 5;
+  // Drift klingt mit Halbwertszeit ~95 Handelstagen ab — Momentum trägt nicht unbegrenzt.
+  // −σ²/2 = GBM-Konvexitätsterm; Median bleibt identisch zur bisherigen Prognose.
+  const driftArr = Array.from({ length: STEPS }, (_, s) => mu * Math.pow(0.5, s / 95) - sigma * sigma / 2);
   const grid = Array.from({ length: STEPS }, () => new Array(PATHS));
   for (let p = 0; p < PATHS; p++) {
-    let x = price;
+    let x = price, start = 0, bpos = L;
     for (let s = 0; s < STEPS; s++) {
-      x *= Math.exp(muArr[s] - sigma * sigma / 2 + sigma * gauss());
+      let shock;
+      if (useBoot) {
+        if (bpos >= L) { start = Math.floor(rnd() * (dem.length - L)); bpos = 0; }
+        shock = dem[start + bpos]; bpos++;
+      } else {
+        shock = sigma * gauss();
+      }
+      if (rnd() < JUMP_P) shock += sigma * studentT() * 2;   // fat-tail Ausreißer
+      x *= Math.exp(driftArr[s] + shock);
       grid[s][p] = x;
     }
   }
@@ -869,7 +890,9 @@ function tipsBalanceHTML() {
   }
   if (!rows.length) return '';
   rows.sort((a, b) => b.d.localeCompare(a.d));
-  const shown = rows.slice(0, 9);
+  // Pro Wert nur den neuesten Eintrag zeigen — kein Wert doppelt in der Liste
+  const seen = new Set();
+  const shown = rows.filter(r => seen.has(r.sym) ? false : seen.add(r.sym)).slice(0, 9);
   const fmtD = d => d.slice(8, 10) + '.' + d.slice(5, 7) + '.';
   const head = nTot
     ? `<span class="num">${nTot} Tipps bisher · <span class="${nPos / nTot >= 0.5 ? 'up-t' : 'down-t'}">${nf0.format(nPos / nTot * 100)} % im Plus</span> · Ø ${fmtPct(sum / nTot)}</span>`
@@ -965,6 +988,17 @@ function renderToday() {
   const indices = [...state.map.values()].filter(t => t.type === 'index');
   const H = state.tipHorizon;
   const tips = computeTips(H);
+  // Top-Bewegungen heute: größte Tagesgewinner/-verlierer im Universum (handelbare Werte)
+  const movers = [...state.map.values()]
+    .filter(t => ['stock', 'etf', 'crypto'].includes(t.type) && dayChange(t) != null)
+    .map(t => ({ t, ch: dayChange(t) }))
+    .sort((a, b) => b.ch - a.ch);
+  const moverCard = m => `<div class="idxCard" data-sym="${esc(m.t.s)}" role="button" tabindex="0">
+      <div class="n">${esc(m.t.n)}</div>
+      <div class="v num">${fmtPrice(m.t.price, m.t.cur)}</div>
+      <span class="pill ${pctClass(m.ch)} num">${fmtPct(m.ch)}</span>
+    </div>`;
+  const moverSet = [...movers.slice(0, 4), ...movers.slice(-4).reverse()].filter((m, i, a) => a.indexOf(m) === i);
   let html = `<div class="sectionTitle">Marktüberblick</div>
   <div class="idxScroll">${indices.map(ix => {
     const ch = dayChange(ix);
@@ -974,6 +1008,8 @@ function renderToday() {
       ${ch != null ? `<span class="pill ${pctClass(ch)} num">${fmtPct(ch)}</span>` : ''}
     </div>`;
   }).join('')}</div>
+  ${moverSet.length >= 2 ? `<div class="sectionTitle">Top-Bewegungen heute</div>
+  <div class="idxScroll">${moverSet.map(moverCard).join('')}</div>` : ''}
   <div class="sectionTitle">Tipps des Tages</div>
   <div class="seg" id="segTipH" role="group" aria-label="Anlagehorizont">
     ${Object.entries(TIP_HORIZONS).map(([d, l]) => `<button data-th="${d}" class="${H === +d ? 'on' : ''}">${l}</button>`).join('')}
@@ -984,6 +1020,10 @@ function renderToday() {
     const h30 = fc.h[H];
     const ch = dayChange(tk);
     const per1000 = Math.round(1000 * h30.expRet);
+    // Chance/Risiko-Verhältnis: möglicher Gewinn (oberes Band) je Einheit Verlustrisiko (unteres Band)
+    const crv = h30.loRet < 0 ? h30.hiRet / -h30.loRet : 9;
+    const crvTxt = crv >= 9 ? '>9' : crv.toFixed(1).replace('.', ',');
+    const crvCls = crv >= 1.5 ? 'up-t' : crv >= 1 ? 'flat-t' : 'down-t';
     html += `<div class="card tip" data-sym="${esc(tk.s)}" role="button" tabindex="0">
       <div class="tiphead">
         <div class="rank">${i + 1}</div>
@@ -1000,7 +1040,7 @@ function renderToday() {
       <div class="fcline">
         <div>
           <div class="fcmain num ${h30.expRet >= 0 ? 'up-t' : 'down-t'}">${TIP_LABEL[H]}: ${fmtPct(h30.expRet)}</div>
-          <div class="fcsub num">Spanne ${fmtPct(h30.loRet)} bis ${fmtPct(h30.hiRet)} · ${per1000 >= 0 ? '+' : ''}${nf0.format(per1000)} € je 1.000 €</div>
+          <div class="fcsub num">Spanne ${fmtPct(h30.loRet)} bis ${fmtPct(h30.hiRet)} · ${per1000 >= 0 ? '+' : ''}${nf0.format(per1000)} € je 1.000 € · Chance/Risiko <span class="${crvCls}">${crvTxt}</span></div>
         </div>
         <span class="pill ${h30.pUp >= 0.55 ? 'up' : h30.pUp <= 0.45 ? 'down' : 'flat'} num">Chance ${nf0.format(h30.pUp * 100)} %</span>
       </div>
@@ -1203,7 +1243,7 @@ function renderDetail(sym) {
         <div class="fcbox"><div class="l">Spanne (20–80 %)</div><div class="v num" style="font-size:.9rem">${fmtPrice(h.lo, tk.cur)} – ${fmtPrice(h.hi, tk.cur)}</div></div>
         <div class="fcbox"><div class="l">Chance steigend</div><div class="v num">${nf0.format(h.pUp * 100)} %</div></div>
       </div>
-      <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade) auf Basis von Drift und Volatilität der letzten 12 Monate.</div>
+      <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade): Block-Bootstrap aus echten Tagesrenditen (fette Ränder, Vola-Cluster) plus seltene Student-t-Sprünge.</div>
     </div>
     ${(() => {
       const bt = backtestOf(sym, H);
