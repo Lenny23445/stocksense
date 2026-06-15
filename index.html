@@ -706,6 +706,50 @@ function backtestOf(sym, h) {
   if (!(h in a.bt)) a.bt[h] = computeBacktest(getTicker(sym), h);
   return a.bt[h];
 }
+/* Prognose-Rückblick: die VOR H Tagen erstellte Prognose (nur mit damaligen Daten,
+   deterministisch wie die Engine) dem inzwischen eingetretenen echten Verlauf gegenüberstellen. */
+function pastForecastCheck(tk, horizonDays) {
+  const c = tk.c, f = tk.type === 'crypto' ? 1 : 5 / 7;
+  const n = Math.max(1, Math.round(horizonDays * f));
+  const anchorIdx = c.length - 1 - n;
+  if (anchorIdx < 70) return null;                 // zu wenig Vorlauf für eine faire Prognose
+  const r = [];
+  for (let i = 1; i <= anchorIdx; i++) r.push(Math.log(c[i] / c[i - 1]));
+  let wsum = 0, msum = 0, w = 1;
+  for (let i = r.length - 1; i >= Math.max(0, r.length - 180); i--) { msum += r[i] * w; wsum += w; w *= 0.97; }
+  const ewma = msum / wsum;
+  const m3 = anchorIdx >= 63 ? c[anchorIdx] / c[anchorIdx - 63] - 1 : null;
+  const momDrift = m3 != null ? Math.log(1 + m3) / 63 : ewma;
+  const mu = Math.max(-0.002, Math.min(0.002, 0.6 * ewma + 0.4 * momDrift));
+  const sigma = stddev(r.slice(-60));
+  if (!isFinite(sigma) || sigma <= 0) return null;
+  const anchorPrice = c[anchorIdx];
+  const med = [], lo = [], hi = [];
+  for (let s = 1; s <= n; s++) {
+    const sumDecay = (1 - Math.pow(Q95, s)) / (1 - Q95);
+    const medLog = mu * sumDecay - sigma * sigma / 2 * s;
+    const sd = sigma * Math.sqrt(s);
+    med.push(anchorPrice * Math.exp(medLog));
+    lo.push(anchorPrice * Math.exp(medLog - 0.8416 * sd));
+    hi.push(anchorPrice * Math.exp(medLog + 0.8416 * sd));
+  }
+  const actual = c.slice(anchorIdx);               // Anker + tatsächlicher Verlauf (n+1 Punkte)
+  const actEnd = c[c.length - 1];
+  return {
+    n, anchorPrice, med, lo, hi, actual,
+    predRet: med[n - 1] / anchorPrice - 1,
+    actRet: actEnd / anchorPrice - 1,
+    inBand: actEnd >= lo[n - 1] && actEnd <= hi[n - 1],
+    anchorTs: tk.t[anchorIdx],
+  };
+}
+function checkOf(sym, h) {
+  const a = analyze(sym);
+  if (!a) return null;
+  a.chk = a.chk || {};
+  if (!(h in a.chk)) a.chk[h] = pastForecastCheck(getTicker(sym), h);
+  return a.chk[h];
+}
 const hitClass = x => x >= 0.6 ? 'up' : x >= 0.45 ? 'flat' : 'down';
 function scoreLabel(s) {
   if (s >= 65) return { txt: 'Kaufsignal', cls: 'up' };
@@ -826,19 +870,62 @@ function drawDetailChart(cv, hist, fc, horizonDays) {
     ctx.fillStyle = css('--text-3');
     ctx.beginPath(); ctx.arc(X(totalN - 1), Y(med[steps - 1]), 2, 0, 7); ctx.fill();
   }
-  // Beispielpfad (realer, realistischer Verlauf) — farbig hervorgehoben im Vordergrund
+  // Beispielpfad (prognostizierter realistischer Verlauf) — farbig, aber blasser als der
+  // echte Verlauf, damit Prognose und Realität klar unterscheidbar bleiben.
   if (steps && sample.length) {
-    ctx.strokeStyle = up ? css('--up') : css('--down');
-    ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.setLineDash([]);
+    ctx.strokeStyle = up ? 'rgba(43,212,139,.6)' : 'rgba(255,92,92,.6)';
+    ctx.lineWidth = 1.6; ctx.lineJoin = 'round'; ctx.setLineDash([]);
     ctx.beginPath(); ctx.moveTo(X(histN - 1), Y(hist.c[histN - 1]));
     sample.forEach((v, i) => ctx.lineTo(X(histN + i), Y(v)));
     ctx.stroke();
-    ctx.fillStyle = up ? css('--up') : css('--down');
-    ctx.beginPath(); ctx.arc(X(totalN - 1), Y(sample[steps - 1]), 2.8, 0, 7); ctx.fill();
+    ctx.fillStyle = up ? 'rgba(43,212,139,.6)' : 'rgba(255,92,92,.6)';
+    ctx.beginPath(); ctx.arc(X(totalN - 1), Y(sample[steps - 1]), 2.6, 0, 7); ctx.fill();
   }
   // Aktueller Kurs-Punkt
   ctx.fillStyle = col;
   ctx.beginPath(); ctx.arc(X(histN - 1), Y(hist.c[histN - 1]), 3, 0, 7); ctx.fill();
+}
+
+/* Prognose-Rückblick-Chart: damalige Prognose (Band + Median, blass) gegen echten Verlauf */
+function drawCheckChart(cv, p) {
+  const { ctx, w, h } = setupCanvas(cv);
+  const padR = 46, padB = 18, padT = 8;
+  const N = p.n;                                   // Schritte ab Anker
+  const all = p.actual.concat(p.hi, p.lo);
+  let min = Math.min(...all), max = Math.max(...all);
+  const pad = (max - min) * 0.06 || max * 0.01; min -= pad; max += pad;
+  const X = i => i / N * (w - padR);
+  const Y = v => padT + (1 - (v - min) / (max - min)) * (h - padT - padB);
+  // Gitter + Y-Beschriftung
+  ctx.font = '10px Inter,sans-serif'; ctx.fillStyle = css('--text-3'); ctx.textAlign = 'left';
+  for (let g = 0; g <= 3; g++) {
+    const v = min + (max - min) * g / 3, y = Y(v);
+    ctx.strokeStyle = 'rgba(255,255,255,.05)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w - padR + 6, y); ctx.stroke();
+    ctx.fillText(v >= 1000 ? nf0.format(v) : nf2.format(v), w - padR + 8, y + 3);
+  }
+  // X-Beschriftung
+  ctx.textAlign = 'center';
+  const fmt = d => d.toLocaleDateString('de-DE', { day: '2-digit', month: 'short' });
+  ctx.fillText(fmt(new Date(p.anchorTs * 1000)), Math.max(24, X(0)), h - 5);
+  ctx.fillText('heute', Math.min(w - padR - 4, X(N)), h - 5);
+  // damaliges Prognoseband (blass im Hintergrund)
+  ctx.beginPath();
+  ctx.moveTo(X(0), Y(p.anchorPrice));
+  p.hi.forEach((v, i) => ctx.lineTo(X(i + 1), Y(v)));
+  for (let i = N - 1; i >= 0; i--) ctx.lineTo(X(i + 1), Y(p.lo[i]));
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(140,150,170,.13)'; ctx.fill();
+  // damaliger Median (grau gestrichelt)
+  ctx.strokeStyle = css('--text-3'); ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(X(0), Y(p.anchorPrice));
+  p.med.forEach((v, i) => ctx.lineTo(X(i + 1), Y(v)));
+  ctx.stroke(); ctx.setLineDash([]);
+  // echter Verlauf (farbig, kräftig im Vordergrund)
+  const up = p.actRet >= 0, col = up ? css('--up') : css('--down');
+  ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  ctx.beginPath(); p.actual.forEach((v, i) => i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v))); ctx.stroke();
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(X(N), Y(p.actual[p.actual.length - 1]), 3, 0, 7); ctx.fill();
 }
 
 /* ════════════════ Daten laden ════════════════ */
@@ -1474,6 +1561,24 @@ function renderDetail(sym) {
         <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">${bt.tests} Walk-Forward-Tests über 2 Jahre: Prognose an vergangenen Tagen nur mit damals verfügbaren Daten erstellt und mit dem tatsächlichen Verlauf nach ${H} Tagen verglichen. Spanne sollte rechnerisch ~60 % treffen.</div>
       </div>`;
     })()}
+    ${(() => {
+      const chk = canTrade ? checkOf(sym, H) : null;
+      if (!chk) return '';
+      const lbl = { 30: '30 Tage', 90: '90 Tage', 180: '6 Monate', 365: '1 Jahr' }[H] || H + ' Tage';
+      const aDate = new Date(chk.anchorTs * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
+      return `<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <strong style="font-size:.95rem">Prognose-Rückblick</strong>
+          <span class="pill ${chk.inBand ? 'up' : 'down'} num">${chk.inBand ? 'in der Spanne' : 'außerhalb'}</span>
+        </div>
+        <canvas id="checkChart" style="width:100%;height:170px;display:block;margin-top:4px"></canvas>
+        <div class="fcgrid" style="margin-top:8px">
+          <div class="fcbox"><div class="l">Damals vorhergesagt</div><div class="v num ${chk.predRet >= 0 ? 'up-t' : 'down-t'}">${fmtPct(chk.predRet)}</div></div>
+          <div class="fcbox"><div class="l">Tatsächlich eingetreten</div><div class="v num ${chk.actRet >= 0 ? 'up-t' : 'down-t'}">${fmtPct(chk.actRet)}</div></div>
+        </div>
+        <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Prognose vom ${aDate} für ${lbl}, nur mit damals verfügbaren Daten gerechnet (gleiche Engine). Farbige Linie = echter Verlauf, grau gestrichelt + Fläche = die damalige Prognose. So siehst Du selbst, wie gut sie war.</div>
+      </div>`;
+    })()}
     <div class="card">
       <strong style="font-size:.95rem;display:block;margin-bottom:10px">Warum diese Einschätzung?</strong>
       ${reasonsHTML(a.reasons)}
@@ -1501,6 +1606,12 @@ function renderDetail(sym) {
     const n = Math.min(RANGES[state.detailRange], tk.c.length);
     const hist = { t: tk.t.slice(-n), c: tk.c.slice(-n) };
     requestAnimationFrame(() => drawDetailChart(cv, hist, fc, H));
+  }
+  // Prognose-Rückblick-Chart
+  const chkCv = $('#checkChart');
+  if (chkCv) {
+    const chk = checkOf(sym, H);
+    if (chk) requestAnimationFrame(() => drawCheckChart(chkCv, chk));
   }
   // Events
   $('#btnBack').addEventListener('click', () => history.length > 1 ? history.back() : (location.hash = '#/'));
