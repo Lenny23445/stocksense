@@ -377,6 +377,7 @@ const state = {
   detailRange: '3M',
   detailHorizon: 30,
   tipHorizon: 30,
+  searchSort: 'score',
   news: {},
   tipsLog: null,
 };
@@ -930,6 +931,82 @@ function reasonsHTML(reasons, limit) {
   return `<ul class="reasons">${sel.map(r => `<li class="${r.s > 0 ? 'pos' : r.s < 0 ? 'neg' : 'neu'}">${r.s > 0 ? ICONS.up : r.s < 0 ? ICONS.down : ICONS.dot}<span>${esc(r.t)}</span></li>`).join('')}</ul>`;
 }
 
+/* ════════════════ Handelsplan: Kaufzone / Ziel / Stop ════════════════
+   Heuristik aus Volatilität + Trend (nur Schlusskurse vorhanden, kein ATR).
+   Orientierung, keine Anlageberatung. */
+function tradePlan(I, fc, H) {
+  if (!I || !fc?.h[H]) return null;
+  const price = I.price;
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  const dailyVol = (I.annVol || 0.32) / Math.sqrt(252);
+  const vol7 = dailyVol * Math.sqrt(7);            // typische 1-Wochen-Bewegung
+  const entryHi = price * (1 - clamp(0.4 * vol7, 0.004, 0.03));
+  const entryLo = price * (1 - clamp(1.5 * vol7, 0.02, 0.10));
+  const stop = entryLo * (1 - clamp(2 * vol7, 0.04, 0.15));
+  const target = Math.max(fc.h[H].target, entryHi * 1.01);
+  // Trend-Einordnung
+  let trend = 'neutral', cls = 'flat-t';
+  if (I.sma50 != null && I.sma200 != null) {
+    if (price > I.sma50 && I.sma50 > I.sma200) { trend = 'Aufwärtstrend'; cls = 'up-t'; }
+    else if (price < I.sma50 && I.sma50 < I.sma200) { trend = 'Abwärtstrend — erhöhtes Risiko'; cls = 'down-t'; }
+  }
+  const rr = (entryHi - stop) > 0 ? (target - entryHi) / (entryHi - stop) : null;
+  return { entryLo, entryHi, target, stop, trend, cls, rr, H };
+}
+function tradePlanHTML(I, fc, H, cur) {
+  const tp = tradePlan(I, fc, H);
+  if (!tp) return '';
+  const lbl = { 30: '30 Tage', 90: '90 Tage', 180: '6 Monate', 365: '1 Jahr' }[H] || H + ' T';
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <strong style="font-size:.95rem">Handelsplan (${lbl})</strong>
+      <span class="pill ${tp.cls}">${tp.trend}</span>
+    </div>
+    <div class="fcgrid" style="margin-top:0">
+      <div class="fcbox"><div class="l">Kaufzone</div><div class="v num" style="font-size:.9rem">${fmtPrice(tp.entryLo, cur)} – ${fmtPrice(tp.entryHi, cur)}</div></div>
+      <div class="fcbox"><div class="l">Kursziel</div><div class="v num up-t">${fmtPrice(tp.target, cur)}</div></div>
+      <div class="fcbox"><div class="l">Stop-Loss</div><div class="v num down-t">${fmtPrice(tp.stop, cur)}</div></div>
+      <div class="fcbox"><div class="l">Chance/Risiko</div><div class="v num ${tp.rr >= 1.5 ? 'up-t' : tp.rr >= 1 ? 'flat-t' : 'down-t'}">${tp.rr != null ? tp.rr.toFixed(1).replace('.', ',') : '–'}</div></div>
+    </div>
+    <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Kaufzone = Rücksetzer leicht unter aktuellem Kurs (als Limit setzbar), Ziel = Median-Prognose, Stop volatilitätsbasiert. Orientierung aus historischen Daten, keine Anlageberatung.</div>
+  </div>`;
+}
+/* 52-Wochen-Spanne als Balken */
+function rangeBarHTML(I, cur) {
+  if (I.hi52 == null || I.lo52 == null || I.hi52 <= I.lo52) return '';
+  const pos = Math.max(0, Math.min(1, (I.price - I.lo52) / (I.hi52 - I.lo52)));
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-2);margin-bottom:8px">
+      <span>52-Wochen-Spanne</span><span class="num">${nf0.format(pos * 100)} % der Spanne</span>
+    </div>
+    <div style="position:relative;height:8px;border-radius:5px;background:linear-gradient(90deg,var(--down,#e5484d)22,var(--flat,#8b8d98)22,var(--up,#30a46c)22)">
+      <div style="position:absolute;top:-3px;left:calc(${(pos * 100).toFixed(1)}% - 4px);width:8px;height:14px;border-radius:3px;background:var(--text-1,#fff);box-shadow:0 0 0 2px var(--bg,#0b0d12)"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:.78rem;color:var(--text-3);margin-top:6px" class="num">
+      <span>Tief ${fmtPrice(I.lo52, cur)}</span><span>Hoch ${fmtPrice(I.hi52, cur)}</span>
+    </div>
+  </div>`;
+}
+/* Sektor-Puls: Ø-Tagesänderung je Branche */
+function sectorPulseHTML() {
+  const byS = new Map();
+  for (const tk of state.map.values()) {
+    if (!['stock', 'etf'].includes(tk.type)) continue;
+    const ch = dayChange(tk);
+    if (ch == null) continue;
+    const e = byS.get(tk.sec) || { sum: 0, n: 0 };
+    e.sum += ch; e.n++; byS.set(tk.sec, e);
+  }
+  const arr = [...byS.entries()].filter(([, e]) => e.n >= 2).map(([sec, e]) => ({ sec, avg: e.sum / e.n }));
+  if (arr.length < 3) return '';
+  arr.sort((a, b) => b.avg - a.avg);
+  return `<div class="sectionTitle">Sektor-Puls heute</div>
+  <div class="idxScroll">${arr.map(s => `<div class="idxCard" style="min-width:120px">
+    <div class="n">${esc(s.sec)}</div>
+    <span class="pill ${pctClass(s.avg)} num" style="margin-top:6px">${fmtPct(s.avg)}</span>
+  </div>`).join('')}</div>`;
+}
+
 /* ════════════════ Schlagzeilen + Stimmung ════════════════ */
 const SENT_POS = ['beat', 'beats', 'surge', 'surges', 'soar', 'soars', 'jump', 'jumps', 'rally', 'record', 'upgrade', 'upgraded', 'buy', 'outperform', 'growth', 'profit', 'strong', 'wins', 'gain', 'gains', 'bullish', 'raises', 'gewinn', 'steigt', 'steigen', 'rekord', 'übertrifft', 'kaufempfehlung', 'stark', 'wachstum', 'erholung', 'hoch'];
 const SENT_NEG = ['miss', 'misses', 'fall', 'falls', 'drop', 'drops', 'plunge', 'plunges', 'sink', 'sinks', 'slump', 'downgrade', 'downgraded', 'sell', 'lawsuit', 'weak', 'loss', 'losses', 'cut', 'cuts', 'bearish', 'warning', 'fear', 'fears', 'risk', 'verlust', 'sinkt', 'bricht', 'warnung', 'schwach', 'klage', 'risiko', 'crash', 'absturz', 'tief'];
@@ -1010,6 +1087,7 @@ function renderToday() {
   }).join('')}</div>
   ${moverSet.length >= 2 ? `<div class="sectionTitle">Top-Bewegungen heute</div>
   <div class="idxScroll">${moverSet.map(moverCard).join('')}</div>` : ''}
+  ${sectorPulseHTML()}
   <div class="sectionTitle">Tipps des Tages</div>
   <div class="seg" id="segTipH" role="group" aria-label="Anlagehorizont">
     ${Object.entries(TIP_HORIZONS).map(([d, l]) => `<button data-th="${d}" class="${H === +d ? 'on' : ''}">${l}</button>`).join('')}
@@ -1044,6 +1122,10 @@ function renderToday() {
         </div>
         <span class="pill ${h30.pUp >= 0.55 ? 'up' : h30.pUp <= 0.45 ? 'down' : 'flat'} num">Chance ${nf0.format(h30.pUp * 100)} %</span>
       </div>
+      ${(() => {
+        const tp = tradePlan(a.I, fc, H);
+        return tp ? `<div class="fcsub num" style="margin:2px 0 8px;font-size:.78rem">Kaufzone ${fmtPrice(tp.entryLo, tk.cur)}–${fmtPrice(tp.entryHi, tk.cur)} · Ziel ${fmtPrice(tp.target, tk.cur)} · Stop ${fmtPrice(tp.stop, tk.cur)}</div>` : '';
+      })()}
       ${(() => {
         const bt = backtestOf(tk.s, H);
         return bt ? `<div class="fcsub num" style="margin:-4px 0 10px;color:var(--text-3);font-size:.78rem">Trefferquote dieser Prognose-Art bei ${esc(tk.n)}: <span class="${bt.dir >= 0.6 ? 'up-t' : bt.dir >= 0.45 ? 'flat-t' : 'down-t'}">${nf0.format(bt.dir * 100)} % Richtung</span> (${bt.tests} Tests)</div>` : '';
@@ -1083,16 +1165,28 @@ function renderSearch() {
   list = list.concat(extras.filter(e => !state.map.has(e.s)));
   if (q) {
     list = list.filter(t => t.n.toLowerCase().includes(q) || t.s.toLowerCase().includes(q) || t.sec.toLowerCase().includes(q));
-  } else {
-    list.sort((a, b) => (analyze(b.s)?.score ?? 0) - (analyze(a.s)?.score ?? 0));
   }
-  let html = list.length ? '<div class="rowGrid">' + list.map(t => rowHTML(t)).join('') + '</div>' : '';
+  const sortKey = {
+    score: t => analyze(t.s)?.score ?? -1,
+    day: t => dayChange(t) ?? -Infinity,
+    mom: t => analyze(t.s)?.I?.mom3 ?? -Infinity,
+  }[state.searchSort] || (t => analyze(t.s)?.score ?? -1);
+  list.sort((a, b) => sortKey(b) - sortKey(a));
+  const SORTS = [['score', 'Score'], ['day', 'Heute'], ['mom', 'Momentum']];
+  const segSort = `<div class="seg" id="segSort" role="group" aria-label="Sortierung" style="margin-bottom:12px">${SORTS.map(([k, l]) => `<button data-sort="${k}" class="${state.searchSort === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  let html = list.length ? segSort + '<div class="rowGrid">' + list.map(t => rowHTML(t)).join('') + '</div>' : '';
   if (q.length >= 2) {
     html += `<button class="btn ghost" id="btnOnlineSearch" style="margin-top:10px">${ICONS.globe} Online nach „${esc(q)}“ suchen</button>`;
   }
   if (!list.length && q.length < 2) html = '<div class="empty">Keine Treffer.</div>';
   el.innerHTML = html;
   $('#btnOnlineSearch')?.addEventListener('click', () => onlineSearch(q));
+  $('#segSort')?.addEventListener('click', e => {
+    const b = e.target.closest('button[data-sort]');
+    if (!b) return;
+    state.searchSort = b.dataset.sort;
+    renderSearch();
+  });
 }
 async function onlineSearch(q) {
   const btn = $('#btnOnlineSearch');
@@ -1245,6 +1339,7 @@ function renderDetail(sym) {
       </div>
       <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade): Block-Bootstrap aus echten Tagesrenditen (fette Ränder, Vola-Cluster) plus seltene Student-t-Sprünge.</div>
     </div>
+    ${canTrade ? tradePlanHTML(I, fc, H, tk.cur) : ''}
     ${(() => {
       const bt = backtestOf(sym, H);
       if (!bt) return '';
@@ -1264,6 +1359,7 @@ function renderDetail(sym) {
       <strong style="font-size:.95rem;display:block;margin-bottom:10px">Warum diese Einschätzung?</strong>
       ${reasonsHTML(a.reasons)}
     </div>
+    ${rangeBarHTML(I, tk.cur)}
     <div class="sectionTitle">Kennzahlen</div>
     <div class="kgrid">
       ${kpiHTML('RSI (14)', I.rsi != null ? nf0.format(I.rsi) : '–', I.rsi >= 70 ? 'überkauft' : I.rsi <= 30 ? 'überverkauft' : 'neutral', I.rsi >= 70 ? 'down-t' : I.rsi <= 30 ? 'up-t' : 'flat-t')}
