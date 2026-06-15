@@ -562,6 +562,13 @@ function computeForecast(tk, I) {
       grid[s][p] = x;
     }
   }
+  // Ein repräsentativer Beispielpfad (endet nahe Median, wackelt aber realistisch) —
+  // VOR dem Sortieren extrahieren, danach ist die Pfad-Identität weg.
+  const finalsSorted = grid[STEPS - 1].slice().sort((a, b) => a - b);
+  const medFinal = finalsSorted[Math.floor(PATHS * 0.5)];
+  let sp = 0, spDiff = Infinity;
+  for (let p = 0; p < PATHS; p++) { const d = Math.abs(grid[STEPS - 1][p] - medFinal); if (d < spDiff) { spDiff = d; sp = p; } }
+  const sample = grid.map(row => row[sp]);
   const med = [], lo = [], hi = [];
   for (let s = 0; s < STEPS; s++) {
     grid[s].sort((a, b) => a - b);
@@ -581,7 +588,7 @@ function computeForecast(tk, I) {
       target: med[idx], pUp: cnt / PATHS, steps: idx + 1,
     };
   };
-  return { med, lo, hi, f, h: { 30: horizon(30), 90: horizon(90), 180: horizon(180), 365: horizon(365) } };
+  return { med, lo, hi, sample, f, h: { 30: horizon(30), 90: horizon(90), 180: horizon(180), 365: horizon(365) } };
 }
 
 function computeReasons(tk, I) {
@@ -727,8 +734,9 @@ function drawDetailChart(cv, hist, fc, horizonDays) {
   const padR = 46, padB = 20, padT = 8;
   const steps = fc ? Math.min(fc.med.length, Math.max(1, Math.round(horizonDays * fc.f))) : 0;
   const med = fc ? fc.med.slice(0, steps) : [], lo = fc ? fc.lo.slice(0, steps) : [], hi = fc ? fc.hi.slice(0, steps) : [];
+  const sample = fc?.sample ? fc.sample.slice(0, steps) : [];
   const histN = hist.c.length, totalN = histN + steps;
-  const all = hist.c.concat(hi, lo);
+  const all = hist.c.concat(hi, lo, sample);
   let min = Math.min(...all), max = Math.max(...all);
   const pad = (max - min) * 0.06 || max * 0.01;
   min -= pad; max += pad;
@@ -776,6 +784,14 @@ function drawDetailChart(cv, hist, fc, horizonDays) {
   gradient.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.lineTo(X(histN - 1), h - padB); ctx.lineTo(X(0), h - padB); ctx.closePath();
   ctx.fillStyle = gradient; ctx.fill();
+  // Beispielpfad: ein möglicher realistischer Verlauf mit Schwankungen
+  if (steps && sample.length) {
+    ctx.strokeStyle = up ? 'rgba(43,212,139,.5)' : 'rgba(255,92,92,.5)';
+    ctx.lineWidth = 1; ctx.lineJoin = 'round'; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(X(histN - 1), Y(hist.c[histN - 1]));
+    sample.forEach((v, i) => ctx.lineTo(X(histN + i), Y(v)));
+    ctx.stroke();
+  }
   // Prognose-Median
   if (steps) {
     ctx.strokeStyle = css('--text-2'); ctx.lineWidth = 1.8; ctx.setLineDash([5, 4]);
@@ -1150,7 +1166,7 @@ function renderToday() {
     const cv = card.querySelector('canvas');
     const fcSteps = Math.min(fc.med.length, Math.max(1, Math.round(H * fc.f)));
     const hist = thin(tk.c.slice(-Math.max(66, fcSteps)), 66);
-    requestAnimationFrame(() => drawSparkline(cv, hist, thin(fc.med.slice(0, fcSteps), 33)));
+    requestAnimationFrame(() => drawSparkline(cv, hist, thin((fc.sample || fc.med).slice(0, fcSteps), 40)));
   });
 }
 
@@ -1337,7 +1353,7 @@ function renderDetail(sym) {
         <div class="fcbox"><div class="l">Spanne (20–80 %)</div><div class="v num" style="font-size:.9rem">${fmtPrice(h.lo, tk.cur)} – ${fmtPrice(h.hi, tk.cur)}</div></div>
         <div class="fcbox"><div class="l">Chance steigend</div><div class="v num">${nf0.format(h.pUp * 100)} %</div></div>
       </div>
-      <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade): Block-Bootstrap aus echten Tagesrenditen (fette Ränder, Vola-Cluster) plus seltene Student-t-Sprünge.</div>
+      <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade): Block-Bootstrap aus echten Tagesrenditen (fette Ränder, Vola-Cluster) plus seltene Student-t-Sprünge. Gestrichelt = Median-Erwartung · dünne Linie = ein möglicher realistischer Verlauf · Fläche = wahrscheinliche Spanne (20–80 %).</div>
     </div>
     ${canTrade ? tradePlanHTML(I, fc, H, tk.cur) : ''}
     ${(() => {
