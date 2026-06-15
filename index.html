@@ -378,6 +378,7 @@ const state = {
   detailHorizon: 30,
   tipHorizon: 30,
   searchSort: 'score',
+  intra: new Map(),    // Symbol → Intraday-Tagesverlauf ('loading' | null | {t,c,prev,cur})
   news: {},
   tipsLog: null,
 };
@@ -816,23 +817,24 @@ function drawDetailChart(cv, hist, fc, horizonDays) {
   gradient.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.lineTo(X(histN - 1), h - padB); ctx.lineTo(X(0), h - padB); ctx.closePath();
   ctx.fillStyle = gradient; ctx.fill();
-  // Beispielpfad: ein möglicher realistischer Verlauf mit Schwankungen
-  if (steps && sample.length) {
-    ctx.strokeStyle = up ? 'rgba(43,212,139,.5)' : 'rgba(255,92,92,.5)';
-    ctx.lineWidth = 1; ctx.lineJoin = 'round'; ctx.setLineDash([]);
-    ctx.beginPath(); ctx.moveTo(X(histN - 1), Y(hist.c[histN - 1]));
-    sample.forEach((v, i) => ctx.lineTo(X(histN + i), Y(v)));
-    ctx.stroke();
-  }
-  // Prognose-Median
+  // Prognose-Median (vorhersehbare Linie) — dezent grau im Hintergrund, aber erkennbar
   if (steps) {
-    ctx.strokeStyle = css('--text-2'); ctx.lineWidth = 1.8; ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = css('--text-3'); ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
     ctx.beginPath(); ctx.moveTo(X(histN - 1), Y(hist.c[histN - 1]));
     med.forEach((v, i) => ctx.lineTo(X(histN + i), Y(v)));
     ctx.stroke(); ctx.setLineDash([]);
-    // Endpunkte beschriften
-    ctx.fillStyle = css('--text-2'); ctx.textAlign = 'left'; ctx.font = '600 10px Inter,sans-serif';
-    ctx.beginPath(); ctx.arc(X(totalN - 1), Y(med[steps - 1]), 2.5, 0, 7); ctx.fill();
+    ctx.fillStyle = css('--text-3');
+    ctx.beginPath(); ctx.arc(X(totalN - 1), Y(med[steps - 1]), 2, 0, 7); ctx.fill();
+  }
+  // Beispielpfad (realer, realistischer Verlauf) — farbig hervorgehoben im Vordergrund
+  if (steps && sample.length) {
+    ctx.strokeStyle = up ? css('--up') : css('--down');
+    ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(X(histN - 1), Y(hist.c[histN - 1]));
+    sample.forEach((v, i) => ctx.lineTo(X(histN + i), Y(v)));
+    ctx.stroke();
+    ctx.fillStyle = up ? css('--up') : css('--down');
+    ctx.beginPath(); ctx.arc(X(totalN - 1), Y(sample[steps - 1]), 2.8, 0, 7); ctx.fill();
   }
   // Aktueller Kurs-Punkt
   ctx.fillStyle = col;
@@ -1332,7 +1334,76 @@ function renderPortfolio() {
 }
 
 /* ════════════════ Rendering: Detail ════════════════ */
-const RANGES = { '1M': 22, '3M': 66, '6M': 132, '1J': 252, 'Max': 9999 };
+const RANGES = { 'Heute': 0, '1M': 22, '3M': 66, '6M': 132, '1J': 252, 'Max': 9999 };
+// Intraday-Tagesverlauf (5-Minuten-Kerzen) via Proxy — für die „Heute“-Ansicht
+async function fetchIntraday(sym) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=1d&interval=5m`;
+  const json = await proxyFetchJSON(url);
+  const r = json?.chart?.result?.[0];
+  if (!r?.timestamp?.length) throw new Error('keine Intraday-Daten');
+  const q = r.indicators.quote[0], t = [], c = [];
+  for (let i = 0; i < r.timestamp.length; i++) {
+    if (q.close[i] == null) continue;
+    t.push(r.timestamp[i]); c.push(q.close[i]);
+  }
+  if (c.length < 2) throw new Error('zu wenig Intraday-Punkte');
+  return { t, c, prev: r.meta.chartPreviousClose ?? r.meta.previousClose ?? c[0], cur: r.meta.currency || getTicker(sym)?.cur || 'USD' };
+}
+function drawChartMsg(cv, msg) {
+  const { ctx, w, h } = setupCanvas(cv);
+  ctx.fillStyle = css('--text-3'); ctx.font = '12px Inter,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(msg, w / 2, h / 2);
+  ctx.textBaseline = 'alphabetic';
+}
+function drawTodayChart(cv, sym) {
+  const d = state.intra.get(sym);
+  if (d === 'loading') { drawChartMsg(cv, 'Lade heutigen Verlauf …'); return; }
+  if (d === null) { drawChartMsg(cv, 'Heutiger Verlauf nicht verfügbar (Live-Dienst nicht erreichbar).'); return; }
+  if (d === undefined) {
+    state.intra.set(sym, 'loading');
+    drawChartMsg(cv, 'Lade heutigen Verlauf …');
+    fetchIntraday(sym)
+      .then(r => { state.intra.set(sym, r); })
+      .catch(() => { state.intra.set(sym, null); })
+      .finally(() => { if (state.detailRange === 'Heute' && location.hash === '#/wert/' + encodeURIComponent(sym)) renderDetail(sym); });
+    return;
+  }
+  // Tagesverlauf zeichnen, Basislinie = Vortagesschluss
+  const { ctx, w, h } = setupCanvas(cv);
+  const padR = 46, padB = 18, padT = 8;
+  const c = d.c, prev = d.prev;
+  const all = c.concat([prev]);
+  let min = Math.min(...all), max = Math.max(...all);
+  const pad = (max - min) * 0.08 || max * 0.01; min -= pad; max += pad;
+  const X = i => i / (c.length - 1) * (w - padR);
+  const Y = v => padT + (1 - (v - min) / (max - min)) * (h - padT - padB);
+  const up = c[c.length - 1] >= prev;
+  const col = up ? css('--up') : css('--down');
+  // Gitter + Y-Beschriftung
+  ctx.font = '10px Inter,sans-serif'; ctx.fillStyle = css('--text-3'); ctx.textAlign = 'left';
+  for (let g = 0; g <= 3; g++) {
+    const v = min + (max - min) * g / 3, y = Y(v);
+    ctx.strokeStyle = 'rgba(255,255,255,.05)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w - padR + 6, y); ctx.stroke();
+    ctx.fillText(v >= 1000 ? nf0.format(v) : nf2.format(v), w - padR + 8, y + 3);
+  }
+  // Basislinie Vortagesschluss
+  ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, Y(prev)); ctx.lineTo(w - padR, Y(prev)); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = css('--text-3'); ctx.textAlign = 'left'; ctx.font = '9px Inter,sans-serif';
+  ctx.fillText('Vortag', 2, Y(prev) - 3);
+  // Verlaufslinie + Fläche
+  ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  ctx.beginPath(); c.forEach((v, i) => i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v))); ctx.stroke();
+  const grad = ctx.createLinearGradient(0, padT, 0, h - padB);
+  grad.addColorStop(0, up ? 'rgba(43,212,139,.16)' : 'rgba(255,92,92,.16)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.lineTo(X(c.length - 1), h - padB); ctx.lineTo(X(0), h - padB); ctx.closePath();
+  ctx.fillStyle = grad; ctx.fill();
+  // Aktueller Punkt
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(X(c.length - 1), Y(c[c.length - 1]), 3, 0, 7); ctx.fill();
+}
 function renderDetail(sym) {
   const el = $('#view-detail');
   const tk = getTicker(sym);
@@ -1385,7 +1456,7 @@ function renderDetail(sym) {
         <div class="fcbox"><div class="l">Spanne (20–80 %)</div><div class="v num" style="font-size:.9rem">${fmtPrice(h.lo, tk.cur)} – ${fmtPrice(h.hi, tk.cur)}</div></div>
         <div class="fcbox"><div class="l">Chance steigend</div><div class="v num">${nf0.format(h.pUp * 100)} %</div></div>
       </div>
-      <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade): Block-Bootstrap aus echten Tagesrenditen (fette Ränder, Vola-Cluster) plus seltene Student-t-Sprünge. Gestrichelt = Median-Erwartung · dünne Linie = ein möglicher realistischer Verlauf · Fläche = wahrscheinliche Spanne (20–80 %).</div>
+      <div class="fcsub" style="font-size:.72rem;color:var(--text-3);margin-top:10px">Monte-Carlo-Simulation (600 Pfade): Block-Bootstrap aus echten Tagesrenditen (fette Ränder, Vola-Cluster) plus seltene Student-t-Sprünge. Farbige Linie = realistischer Verlauf (hervorgehoben) · grau gestrichelt = Median-Erwartung im Hintergrund · Fläche = wahrscheinliche Spanne (20–80 %).</div>
     </div>
     ${canTrade ? tradePlanHTML(I, fc, H, tk.cur) : ''}
     ${(() => {
@@ -1423,10 +1494,14 @@ function renderDetail(sym) {
     ${canTrade ? `<div class="detbtns"><button class="btn primary" id="btnToPf">${ICONS.plus} Ins Portfolio</button></div>` : ''}
     <div class="disclaimer">Keine Anlageberatung. Prognose und Score basieren ausschließlich auf historischen Kursdaten — sie sind keine verlässliche Vorhersage künftiger Entwicklungen.</div>`;
   // Chart
-  const n = Math.min(RANGES[state.detailRange], tk.c.length);
-  const hist = { t: tk.t.slice(-n), c: tk.c.slice(-n) };
   const cv = $('#detailChart');
-  requestAnimationFrame(() => drawDetailChart(cv, hist, fc, H));
+  if (state.detailRange === 'Heute') {
+    drawTodayChart(cv, sym);
+  } else {
+    const n = Math.min(RANGES[state.detailRange], tk.c.length);
+    const hist = { t: tk.t.slice(-n), c: tk.c.slice(-n) };
+    requestAnimationFrame(() => drawDetailChart(cv, hist, fc, H));
+  }
   // Events
   $('#btnBack').addEventListener('click', () => history.length > 1 ? history.back() : (location.hash = '#/'));
   $('#btnStar')?.addEventListener('click', () => {
