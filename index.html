@@ -543,6 +543,19 @@ function computeForecast(tk, I) {
   const pool = r.slice(-504), poolMean = mean(pool), dem = pool.map(x => x - poolMean);
   const L = 5, JUMP_P = 0.012;            // Blocklänge erhält Vola-Cluster; ~1 % der Tage t-Sprung
   const useBoot = dem.length >= L + 5;
+  // Earnings-Schwankung: an bekannten Quartalsterminen bewegt sich der Kurs historisch stärker.
+  // Termin (tk.e, Unix) kommt aus der Datenpipeline; Sprunghöhe = typischer Großtag des Werts
+  // (97-%-Quantil der |Tagesrendite|, mind. 1,5·σ). So bauscht die Spanne genau dort auf.
+  let earnStep = -1, earnTs = null;
+  if (tk.e && tk.t && tk.t.length) {
+    const daysUntil = (tk.e - tk.t[tk.t.length - 1]) / 86400;
+    const st = Math.round(daysUntil * f);
+    if (daysUntil > 0 && st >= 1 && st < STEPS) { earnStep = st; earnTs = tk.e; }
+  }
+  const absR = r.map(Math.abs).sort((a, b) => a - b);
+  const earnMove = earnStep >= 0
+    ? Math.min(0.15, Math.max(1.5 * sigma, absR.length ? absR[Math.floor(absR.length * 0.97)] : 2 * sigma))
+    : 0;
   // Drift klingt mit Halbwertszeit ~95 Handelstagen ab — Momentum trägt nicht unbegrenzt.
   // −σ²/2 = GBM-Konvexitätsterm; Median bleibt identisch zur bisherigen Prognose.
   const driftArr = Array.from({ length: STEPS }, (_, s) => mu * Math.pow(0.5, s / 95) - sigma * sigma / 2);
@@ -558,6 +571,7 @@ function computeForecast(tk, I) {
         shock = sigma * gauss();
       }
       if (rnd() < JUMP_P) shock += sigma * studentT() * 2;   // fat-tail Ausreißer
+      if (s === earnStep) shock += earnMove * gauss();        // erhöhte Schwankung am Quartalstermin
       x *= Math.exp(driftArr[s] + shock);
       grid[s][p] = x;
     }
@@ -591,12 +605,19 @@ function computeForecast(tk, I) {
       target: med[idx], pUp: cnt / PATHS, steps: idx + 1,
     };
   };
-  return { med, lo, hi, sample, f, h: { 30: horizon(30), 90: horizon(90), 180: horizon(180), 365: horizon(365) } };
+  return { med, lo, hi, sample, f, earnStep, earnTs, h: { 30: horizon(30), 90: horizon(90), 180: horizon(180), 365: horizon(365) } };
 }
 
 function computeReasons(tk, I) {
   const R = [];
   const add = (s, t) => R.push({ s, t });
+  if (tk.e) {
+    const du = (tk.e - Date.now() / 1000) / 86400;
+    if (du > 0 && du < 120) {
+      const d = new Date(tk.e * 1000).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+      add(0, `Quartalszahlen am ${d} (in ~${Math.round(du)} Tagen) → kurzfristig erhöhte Schwankung eingerechnet`);
+    }
+  }
   if (I.sma200 != null) {
     const d = I.price / I.sma200 - 1;
     add(d > 0.02 ? 1 : d < -0.02 ? -1 : 0,
@@ -766,6 +787,14 @@ function drawDetailChart(cv, hist, fc, horizonDays) {
   ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.setLineDash([3, 4]);
   ctx.beginPath(); ctx.moveTo(X(histN - 1), padT); ctx.lineTo(X(histN - 1), h - padB); ctx.stroke();
   ctx.setLineDash([]);
+  // Quartalszahlen-Marker: dort ist die Schwankung in der Simulation erhöht
+  if (steps && fc && fc.earnStep >= 1 && fc.earnStep < steps) {
+    const xe = X(histN + fc.earnStep);
+    ctx.strokeStyle = 'rgba(245,180,40,.55)'; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(xe, padT + 12); ctx.lineTo(xe, h - padB); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(245,180,40,.95)'; ctx.font = '600 9px Inter,sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Zahlen', xe, padT + 8);
+  }
   // Prognoseband
   if (steps) {
     ctx.beginPath();

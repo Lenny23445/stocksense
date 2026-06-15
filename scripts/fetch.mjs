@@ -144,11 +144,53 @@ async function fetchTicker(def, attempt = 1) {
   }
 }
 
+// Yahoo-Crumb (Cookie + Token) — nötig für quoteSummary (Earnings-Termine)
+async function getYahooAuth() {
+  try {
+    const r1 = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': UA } });
+    const sc = typeof r1.headers.getSetCookie === 'function'
+      ? r1.headers.getSetCookie()
+      : [r1.headers.get('set-cookie')].filter(Boolean);
+    const cookie = sc.map(c => c.split(';')[0]).join('; ');
+    if (!cookie) return null;
+    const r2 = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', { headers: { 'User-Agent': UA, cookie } });
+    const crumb = (await r2.text()).trim();
+    if (!crumb || crumb.includes('<') || crumb.length > 40) return null;
+    return { cookie, crumb };
+  } catch { return null; }
+}
+
+// Nächster künftiger Quartalstermin (Unix-Sekunden) oder null
+async function fetchEarnings(sym, auth) {
+  if (!auth) return null;
+  try {
+    const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=calendarEvents&crumb=${encodeURIComponent(auth.crumb)}`;
+    const res = await fetch(url, { headers: { 'User-Agent': UA, cookie: auth.cookie, Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const ed = j?.quoteSummary?.result?.[0]?.calendarEvents?.earnings?.earningsDate;
+    if (!ed?.length) return null;
+    const now = Math.floor(Date.now() / 1000);
+    const future = ed.map(x => x?.raw).filter(x => x && x > now).sort((a, b) => a - b);
+    return future[0] || null;
+  } catch { return null; }
+}
+
+const auth = await getYahooAuth();
+if (!auth) console.error('Hinweis: kein Yahoo-Crumb — Quartalstermine werden übersprungen.');
+
 const out = { updated: Math.floor(Date.now() / 1000), tickers: [] };
-let ok = 0, fail = 0;
+let ok = 0, fail = 0, earn = 0;
 for (const def of UNIVERSE) {
   const data = await fetchTicker(def);
-  if (data) { out.tickers.push(data); ok++; } else { fail++; }
+  if (data) {
+    if (def.type === 'stock' && auth) {
+      const e = await fetchEarnings(def.s, auth);
+      if (e) { data.e = e; earn++; }
+      await sleep(200);
+    }
+    out.tickers.push(data); ok++;
+  } else { fail++; }
   await sleep(250);
 }
 
@@ -159,4 +201,4 @@ if (ok < UNIVERSE.length * 0.6) {
 
 mkdirSync(join(ROOT, 'data'), { recursive: true });
 writeFileSync(join(ROOT, 'data', 'universe.json'), JSON.stringify(out));
-console.log(`Fertig: ${ok} OK, ${fail} Fehler → data/universe.json`);
+console.log(`Fertig: ${ok} OK, ${fail} Fehler, ${earn} Quartalstermine → data/universe.json`);
